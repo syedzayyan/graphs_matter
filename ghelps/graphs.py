@@ -29,7 +29,7 @@ def _string_links(cfg: dict) -> pd.DataFrame:
 
 def _string_links_full(cfg: dict, channels: list[str]) -> pd.DataFrame:
     """STRING links with the requested channel columns, proteins mapped to ENSG (g1, g2)."""
-    path = Path(cfg["paths"]["collate"]) / "9606.protein.links.full.v12.0.txt"
+    path = ids.RAW / "9606.protein.links.full.v12.0.txt.gz"
     df = pd.read_csv(path, sep=" ", usecols=["protein1", "protein2", "combined_score", *channels])
     al = pd.read_csv(ids.RAW / "string_aliases.txt.gz", sep="\t", names=["ensp", "alias", "src"], comment="#")
     al = al[al.src == "Ensembl_gene"].drop_duplicates("ensp")

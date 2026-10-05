@@ -93,8 +93,9 @@ def main() -> None:
     a = ap.parse_args()
     if a.device:
         os.environ["GHELPS_DEVICE"] = a.device
-    from ghelps import device
+    from ghelps import device, ensure
 
+    ensure.ensure_data()  # fetch + build anything missing (e.g. on a fresh HPC checkout)
     cfg = yaml.safe_load(open(a.config))
     out = ROOT / cfg.get("out", "results/tuning")
     out.mkdir(parents=True, exist_ok=True)

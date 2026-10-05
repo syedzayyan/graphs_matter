@@ -1,10 +1,12 @@
 """Single entry point.
 
   uv run python main.py device                                   # which device will be used
+  uv run python main.py fetch                                    # download missing raw sources
   uv run python main.py build [--steps graphs structure ...]     # stages 1-2 (data release)
   uv run python main.py run configs/exp_headline.yaml [--params results/tuning/best_params.yaml]
   uv run python main.py summarise headline [--metric auroc|auprc]
 
+`run` (and tune.py) first fetch any missing raw data and build any missing processed data.
 Device: CUDA when available, otherwise CPU (override with --device or GHELPS_DEVICE).
 Hyperparameters: the best params written by tune.py, if present (--no-tuned for defaults).
 Results: results/<exp>/results.csv (every run x regime) and summary_*.csv from `summarise`.
@@ -16,7 +18,6 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-BUILD_STEPS = ["graphs", "structure", "edge_attr", "features", "splits"]
 
 
 def main() -> None:
@@ -26,9 +27,11 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("device", help="print the device runs will use")
+    sub.add_parser("fetch", help="download any missing raw sources into data/raw")
 
-    b = sub.add_parser("build", help="build graphs, structural stats, edge vectors, features, splits")
-    b.add_argument("--steps", nargs="+", choices=BUILD_STEPS, default=BUILD_STEPS)
+    b = sub.add_parser("build", help="fetch + build graphs, structural stats, edge vectors, features, splits")
+    b.add_argument("--steps", nargs="+", choices=["graphs", "structure", "edge_attr", "features", "splits"],
+                   help="rebuild exactly these steps (default: whatever is missing)")
 
     r = sub.add_parser("run", help="run an experiment config")
     r.add_argument("config")
@@ -47,7 +50,7 @@ def main() -> None:
     if a.device:
         os.environ["GHELPS_DEVICE"] = a.device  # read by ghelps.device in every worker
     sys.path.insert(0, str(ROOT))
-    from ghelps import device
+    from ghelps import device, ensure, fetch
 
     if a.cmd == "device":
         import torch
@@ -55,15 +58,20 @@ def main() -> None:
         name = torch.cuda.get_device_name(dev) if dev.type == "cuda" else "cpu"
         print(f"{dev} ({name})")
 
+    elif a.cmd == "fetch":
+        fetch.fetch_all()
+
     elif a.cmd == "build":
-        for step in BUILD_STEPS:  # always in dependency order
-            if step in a.steps:
-                print(f"== build {step}", flush=True)
-                runpy.run_path(str(ROOT / "scripts" / f"build_{step}.py"), run_name="__main__")
+        if a.steps:
+            fetch.fetch_all()
+            ensure.build(a.steps, force=True)
+        else:
+            ensure.ensure_data()
 
     elif a.cmd == "run":
         import yaml
         from ghelps import runner
+        ensure.ensure_data()
         exp = yaml.safe_load(open(a.config))
         if a.name:
             exp["name"] = a.name

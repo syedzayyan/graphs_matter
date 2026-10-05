@@ -10,7 +10,7 @@
 #SBATCH --gres=gpu:1
 
 # Headline grid on one GPU. Finished runs are skipped, so resubmitting resumes.
-# data/processed/ must already exist on the cluster (rsync it or run `main.py build`).
+# Missing data is fetched and built automatically (see ghelps/ensure.py).
 # Usage: sbatch scripts/hpc/run_headline.sbatch [config]   (default configs/exp_headline.yaml)
 
 set -euo pipefail

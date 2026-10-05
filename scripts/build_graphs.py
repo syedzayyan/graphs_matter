@@ -20,7 +20,6 @@ from ghelps import graphs  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 cfg = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))
-cfg["paths"]["collate"] = str((ROOT / cfg["paths"]["collate"]).resolve())
 out = ROOT / cfg["paths"]["out"] / "graphs"
 out.mkdir(parents=True, exist_ok=True)
 

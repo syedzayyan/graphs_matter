@@ -1,0 +1,79 @@
+"""Make sure raw data and the processed benchmark exist before tuning or running.
+
+ensure_data(): fetch missing raw sources, then run every build step whose outputs are
+missing (and every step after it, since later steps depend on earlier ones). Guarded by
+a file lock so parallel jobs (e.g. a tuning array) don't fetch or build at the same time;
+the first job does the work and the others wait, then find everything in place.
+"""
+from __future__ import annotations
+
+import fcntl
+import runpy
+import shutil
+from contextlib import contextmanager
+from pathlib import Path
+
+import yaml
+
+from ghelps import fetch
+
+ROOT = Path(__file__).resolve().parents[1]
+P = ROOT / "data" / "processed"
+STEPS = ["graphs", "structure", "edge_attr", "features", "splits"]
+
+
+def _universes() -> dict[str, list[str]]:
+    return yaml.safe_load(open(ROOT / "configs" / "data.yaml"))["universes"]
+
+
+def _done(step: str) -> bool:
+    u = _universes()
+    if step == "graphs":
+        return (P / "graphs" / "summary.tsv").exists() and all((P / "graphs" / n / "genes.txt").exists() for n in u)
+    if step == "structure":
+        want = [g.name.replace(".npy", ".parquet") for n in u for g in (P / "graphs" / n).glob("*.npy")
+                if ".empty." not in g.name]
+        return bool(want) and all((P / "structure" / n / w).exists() for n in u for w in want
+                                  if (P / "graphs" / n / w.replace(".parquet", ".npy")).exists())
+    if step == "edge_attr":
+        return all((P / "edge_attr" / n / f"{g}.shufattr.npy").exists() and
+                   (P / "graphs" / n / f"{g}.empty.npy").exists() for n, gs in u.items() for g in gs)
+    if step == "features":
+        return all((P / "features" / n / "pubmed.parquet").exists() for n in u)
+    if step == "splits":
+        return (P / "splits" / "summary.tsv").exists()
+    raise ValueError(step)
+
+
+@contextmanager
+def _lock():
+    (ROOT / "data").mkdir(exist_ok=True)
+    with open(ROOT / "data" / ".ensure.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def build(steps: list[str] | None = None, force: bool = False) -> None:
+    """Run build steps in dependency order. Without `force`, start from the first step
+    whose outputs are missing; with `force`, run exactly `steps`."""
+    if force:
+        todo = [s for s in STEPS if s in (steps or STEPS)]
+    else:
+        first = next((i for i, s in enumerate(STEPS) if not _done(s)), None)
+        todo = [] if first is None else STEPS[first:]
+    if "graphs" in todo and not force:
+        shutil.rmtree(P, ignore_errors=True)  # everything downstream is keyed to the graphs
+    for step in todo:
+        print(f"[build] {step}", flush=True)
+        runpy.run_path(str(ROOT / "scripts" / f"build_{step}.py"), run_name="__main__")
+
+
+def ensure_data() -> None:
+    with _lock():
+        if fetch.missing():
+            fetch.fetch_all()
+        if not all(_done(s) for s in STEPS):
+            build()

@@ -27,7 +27,6 @@ ROOT = Path(__file__).resolve().parents[1]
 P = ROOT / "data" / "processed"
 CHANNELS = ["neighborhood", "fusion", "cooccurence", "coexpression", "experiments", "database", "textmining"]
 cfg = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))
-cfg["paths"]["collate"] = str((ROOT / cfg["paths"]["collate"]).resolve())
 
 links = graphs._string_links_full(cfg, CHANNELS)
 raw = {g: pd.read_csv(P / "graphs" / f"{g}.raw.tsv", sep="\t") for g in graphs.GRAPHS}

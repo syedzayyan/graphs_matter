@@ -5,18 +5,27 @@ gene prediction, on real gene graphs vs degree-preserving rewired copies.
 
 ```bash
 uv sync
-./scripts/download.sh                          # most raw sources (see "Sources" for the rest)
-uv run python main.py build                    # stages 1-2: graphs, stats, edge vectors, features, splits
-uv run python main.py device                   # cuda if available, else cpu
-
-uv run python tune.py configs/tune.yaml        # Optuna -> results/tuning/best_params.yaml
+uv run python tune.py configs/tune.yaml                  # Optuna -> results/tuning/best_params.yaml
 uv run python main.py run configs/exp_headline.yaml      # uses best_params.yaml if present
 uv run python main.py summarise headline [--metric auprc]
 
-# on the cluster (GPU):
-sbatch scripts/hpc/tune.sbatch                 # array job, one task per model
-sbatch scripts/hpc/run_headline.sbatch         # then the grid with tuned params
+# on the cluster: prepare (fetch + build) -> tune array -> grid, chained with dependencies
+bash scripts/hpc/submit_all.sh
 ```
+
+**Data on a fresh checkout.** `tune.py`, `main.py run` and `main.py build` all call `ghelps.ensure.ensure_data()` before doing anything else. It downloads any missing raw source (`ghelps/fetch.py`), then runs any build step whose outputs are missing:
+- `graphs`
+- `structure`
+- `edge_attr`
+- `features`
+- `splits`
+
+It works under a file lock. On the cluster, `submit_all.sh` also runs a single preparation job first, because shared filesystems don't always honour `flock`.
+
+Other commands:
+- `main.py fetch`: download missing raw sources only.
+- `main.py build --steps …`: force a rebuild of specific steps.
+- `main.py device`: show which device runs will use.
 
 **Outputs**
 - `results/<exp>/results.csv`: one row per run × evaluation regime, with the full config and hyperparameters.
@@ -108,11 +117,18 @@ On rewired copies the real vectors are permuted onto the new edges.
 
 ## Sources
 
-- **Already local** (`../../collate_data/data`): STRING v12 links, IntAct.
-- **`scripts/download.sh`:** Reactome FI, HGNC, gene2pubmed, GOA, UniProt/Pfam, Ensembl2Reactome, Minikel (`ericminikel/genetic_support`).
-- **Fetched separately:**
-  - STRING aliases.
-  - HuRI, from `interactome-atlas.org`; the `www.` host has a bad TLS certificate.
-  - Open Targets 26.09 (`target_tractability`, `association_overall_direct`, `drug_*`).
-  - Pharos TDLs, via the GraphQL `download` query.
-  - Finan Table S1, via the DrugnomeAI repo. It is no longer used.
+Everything is downloaded by `ghelps/fetch.py` into `data/raw`, and existing files are skipped:
+- **STRING v12:** links (all channels) and aliases.
+- **IntAct:** the human MITAB archive, stream-filtered to human–human rows. The archive is deleted afterwards.
+- **HuRI:** from `interactome-atlas.org`. The `www.` host has a mismatched TLS certificate.
+- **Reactome FI** (2025-04-14).
+- **HGNC.**
+- **gene2pubmed.**
+- **GOA human.**
+- **Ensembl2Reactome.**
+- **UniProt reviewed human, with Pfam.**
+- **Open Targets `target_tractability`:** pinned to release 26.09.
+- **Pharos TDLs:** via the GraphQL bulk `download` query.
+- **Minikel et al. 2024:** from `ericminikel/genetic_support`.
+
+Unpinned: GOA, Ensembl2Reactome, gene2pubmed, UniProt and Pharos all serve their current release. Record the fetch date when freezing the benchmark.

@@ -1,7 +1,6 @@
 # Stage-1 data build. Every downstream artefact is derived from these choices.
 paths:
   raw: data/raw
-  collate: ../../collate_data/data     # pre-existing STRING / IntAct dumps
   out: data/processed
 
 graphs:
