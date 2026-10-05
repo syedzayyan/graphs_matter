@@ -1,0 +1,13 @@
+# Optuna tuning (tune.py). Train/val folds of the real graph only; test is never seen.
+out: results/tuning
+universe: main
+graph: string
+labels: minikel
+split: random
+seeds: [0, 1]              # objective = mean val AUPRC over these split seeds
+trials: 60                 # per (model, loss) study
+timeout_per_study: 14400   # seconds
+sampler_seed: 0
+models: [deg_lr, rf_struct, labelprop, mlp_feat, rf_feat, mlp_feat_struct, rf_feat_struct,
+         sign_feat, cs_feat, gcn_none, gcn_feat, gat_none, gat_feat, gat_edge_feat, gp]
+losses: [nnpu, pn]

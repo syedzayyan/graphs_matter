@@ -1,0 +1,6 @@
+data/raw/
+data/processed/
+results/
+.venv/
+__pycache__/
+ghelps.egg-info

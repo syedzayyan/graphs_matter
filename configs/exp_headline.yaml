@@ -1,0 +1,14 @@
+# Headline: does the graph matter inside graph models? STRING real vs rewired vs empty
+# (vs shuffled edge vectors for the edge-aware model), Minikel labels, random + Pfam
+# splits, full ladder, both losses, 5 seeds. Look at this before scaling up.
+name: headline
+grid:
+  universe: [main]
+  graph: [string]
+  copy: [real, rw0, rw1, rw2, empty, shufattr]
+  labels: [minikel]
+  split: [random, pfam]
+  seed: [0, 1, 2, 3, 4]
+  model: [deg_lr, rf_struct, labelprop, mlp_feat, rf_feat, mlp_feat_struct, rf_feat_struct,
+          sign_feat, cs_feat, gcn_none, gcn_feat, gat_none, gat_feat, gat_edge_feat, gp]
+  loss: [nnpu, pn]

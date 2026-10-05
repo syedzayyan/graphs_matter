@@ -1,0 +1,11 @@
+name: smoke
+grid:
+  universe: [main]
+  graph: [string]
+  copy: [real, rw0, empty, shufattr]
+  labels: [minikel]
+  split: [random]
+  seed: [0]
+  model: [deg_lr, rf_struct, labelprop, mlp_feat, rf_feat, mlp_feat_struct, rf_feat_struct,
+          sign_feat, cs_feat, gcn_none, gcn_feat, gat_none, gat_feat, gat_edge_feat, gp]
+  loss: [nnpu]

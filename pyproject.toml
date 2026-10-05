@@ -1,0 +1,32 @@
+[project]
+name = "ghelps"
+version = "0.1.0"
+description = "Does the graph help? Benchmarking GNNs vs structure-matched baselines for drug-target prediction"
+authors = [{ name = "Zayyan" }]
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "scipy",
+    "scikit-learn",
+    "networkx",
+    "python-igraph",
+    "leidenalg",
+    "openpyxl",
+    "pyyaml",
+    "matplotlib",
+    "statsmodels",
+    "tqdm",
+    "torch>=2.4",
+    "torch-geometric>=2.6",
+    "gpytorch>=1.15.2",
+    "optuna>=5.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["ghelps*"]

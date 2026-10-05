@@ -1,0 +1,43 @@
+# Stage-1 data build. Every downstream artefact is derived from these choices.
+paths:
+  raw: data/raw
+  collate: ../../collate_data/data     # pre-existing STRING / IntAct dumps
+  out: data/processed
+
+graphs:
+  string:
+    combined_score_min: 700
+  string_exp:
+    # Direct experimental channel only (no *_transferred), STRING "medium" cut-off.
+    experiments_min: 400
+  intact:
+    miscore_min: 0.45                  # IntAct's own medium-confidence threshold
+    keep_types: ["association", "physical association", "direct interaction",
+                 "phosphorylation reaction", "dephosphorylation reaction",
+                 "ubiquitination reaction", "protein cleavage", "cleavage reaction",
+                 "methylation reaction", "adp ribosylation reaction", "enzymatic reaction"]
+  reactome_fi:
+    include_predicted: true
+  huri: {}
+
+rewire:
+  n_copies: 3
+  swaps_per_edge: 10
+  seed: 0
+
+labels:
+  minikel_min_phase: "Phase III"       # >= Phase III counts as positive
+
+# Gene universes. "main": intersection of the four non-HuRI graphs. "huri": adds HuRI
+# (= 5-way intersection), used for the study-bias test with all five graphs on equal genes.
+universes:
+  main: [string, string_exp, intact, reactome_fi]
+  huri: [string, string_exp, intact, reactome_fi, huri]
+
+splits:
+  n_seeds: 5
+  leiden_resolution: 5.0     # ~70-85 communities, none > 5% of genes
+  leiden_seed: 0
+  recent_from_year: 2021          # rcnt stand-in: first Minikel launch >= this year
+  neg_per_pos: 5                  # matched negatives per test positive
+  pathway_match_max_genes: 100    # same-pathway negatives use specific pathways only
