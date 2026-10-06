@@ -8,20 +8,18 @@
 #SBATCH -t 24:0:0
 #SBATCH --mem-per-cpu=7500M
 #SBATCH --gres=gpu:1
-#SBATCH --array=0-14
+#SBATCH --array=0-32
 
-# One array task per model in configs/tune.yaml (15 models, both losses each).
-# All tasks share results/tuning/optuna.db, so resubmitting resumes unfinished studies.
-# Afterwards:  sbatch scripts/hpc/run_headline.sbatch   (main.py picks up best_params.yaml)
+# One array task per (model, graph condition) pair from configs/tune.yaml (33 pairs);
+# each task tunes both losses. All tasks share results/tuning/optuna.db, so resubmitting
+# resumes unfinished studies. If configs/tune.yaml's model list changes, update --array
+# (the task list is printed by: uv run python -c "from tune import task_list; print(task_list())").
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
-export PYTHONUNBUFFERED=1
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-
-MODELS=($(uv run python -c "import yaml; print(' '.join(yaml.safe_load(open('configs/tune.yaml'))['models']))"))
-MODEL="${MODELS[$SLURM_ARRAY_TASK_ID]}"
-echo "tuning ${MODEL}"
+source scripts/hpc/env.sh   # GHELPS_DATA on scratch
 
 uv sync --frozen
-uv run python tune.py configs/tune.yaml --models "${MODEL}" --device cuda
+read -r MODEL COND < <(uv run python -c "from tune import task_list; print(*task_list()[${SLURM_ARRAY_TASK_ID}])")
+echo "tuning ${MODEL} on condition ${COND}"
+uv run python tune.py configs/tune.yaml --models "${MODEL}" --conditions "${COND}" --device cuda

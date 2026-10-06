@@ -15,10 +15,10 @@ from pathlib import Path
 
 import yaml
 
-from ghelps import fetch
+from ghelps import fetch, paths
 
 ROOT = Path(__file__).resolve().parents[1]
-P = ROOT / "data" / "processed"
+P = paths.PROCESSED
 STEPS = ["graphs", "structure", "edge_attr", "features", "splits"]
 
 
@@ -41,14 +41,16 @@ def _done(step: str) -> bool:
     if step == "features":
         return all((P / "features" / n / "pubmed.parquet").exists() for n in u)
     if step == "splits":
-        return (P / "splits" / "summary.tsv").exists()
+        n = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))["splits"]["n_seeds"]
+        last = P / "splits" / next(iter(u)) / "minikel" / "random" / f"seed{n - 1}.neg.parquet"
+        return (P / "splits" / "summary.tsv").exists() and last.exists()
     raise ValueError(step)
 
 
 @contextmanager
 def _lock():
-    (ROOT / "data").mkdir(exist_ok=True)
-    with open(ROOT / "data" / ".ensure.lock", "w") as fh:
+    paths.DATA.mkdir(parents=True, exist_ok=True)
+    with open(paths.DATA / ".ensure.lock", "w") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             yield

@@ -13,6 +13,8 @@ uv run python main.py summarise headline [--metric auprc]
 bash scripts/hpc/submit_all.sh
 ```
 
+**Data location.** Raw downloads go in `$GHELPS_DATA/raw` and the built benchmark in `$GHELPS_DATA/processed`. The default is `<repo>/data`. On the cluster, `scripts/hpc/env.sh` sets it to `/data/scratch/bty644/ghelps/data`.
+
 **Data on a fresh checkout.** `tune.py`, `main.py run` and `main.py build` all call `ghelps.ensure.ensure_data()` before doing anything else. It downloads any missing raw source (`ghelps/fetch.py`), then runs any build step whose outputs are missing:
 - `graphs`
 - `structure`
@@ -33,13 +35,17 @@ Other commands:
 - `graph_effect_<metric>.csv`: paired-by-seed real − empty, real − rewired and real − shufattr.
 - `gp_attribution.csv`: per-block share of the GP's predictive signal.
 
-**Tuning**
-- One Optuna TPE study per (model, loss), maximising mean val AUPRC over split seeds 0–1.
-- It uses the real graph and the train/val folds only.
-- The tuned parameters are reused unchanged for the rewired, empty and shufattr conditions, so the graph is the only thing that varies between them.
-
-All choices live in `configs/data.yaml` (data) and `configs/exp_*.yaml` (experiments).
-`data/processed/` is the benchmark release.
+**Tuning** (`tune.py`) runs one Optuna TPE study per (model, loss, graph condition):
+- **Conditions:**
+  - `real` (also used for `shufattr` runs)
+  - `rewired` (tuned on rw0, used for rw0–rw2)
+  - `empty`
+  - `none` (graph-free models)
+- **Why per condition:** reusing real-graph parameters on the controls collapsed them. For example, GAT on a rewired graph dropped from 0.83 to 0.54 AUROC, which inflated real − rewired.
+- **Objective:** mean val AUPRC over the dedicated tuning split seeds 5–6. These seeds are never evaluated; experiments use seeds 0–4, and test folds are never touched.
+- **Selection bias:** the stored `_val_auprc` is a max over trials, so it is optimistic. Don't compare it across models.
+- **Cluster:** `scripts/hpc/tune.sbatch` runs one array task per (model, condition) pair.
+- **Result filtering:** `main.py run` writes `manifest.txt`, so `results.csv` only covers the current grid and never mixes in older runs.
 
 ## Data decisions
 

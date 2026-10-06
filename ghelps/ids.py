@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pandas as pd
 
+from ghelps import paths
+
 ROOT = Path(__file__).resolve().parents[1]
-RAW = ROOT / "data" / "raw"
+RAW = paths.RAW
 
 
 @lru_cache(maxsize=1)

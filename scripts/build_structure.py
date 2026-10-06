@@ -9,11 +9,11 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ghelps import structure  # noqa: E402
+from ghelps import paths, structure  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-G = ROOT / "data" / "processed" / "graphs"
-OUT = ROOT / "data" / "processed" / "structure"
+G = paths.PROCESSED / "graphs"
+OUT = paths.PROCESSED / "structure"
 
 
 def job(path: Path) -> str:

@@ -21,10 +21,10 @@ from torch_geometric.data import Data
 from torch_geometric.transforms import AddLaplacianEigenvectorPE
 from torch_geometric.utils import to_undirected
 
-from ghelps import structure
+from ghelps import paths, structure
 
 ROOT = Path(__file__).resolve().parents[1]
-P = ROOT / "data" / "processed"
+P = paths.PROCESSED
 FEATURE_BLOCKS = ("go", "pfam", "pathway", "tract")
 SVD_DIM = 256
 GP_BLOCK_DIM = 32

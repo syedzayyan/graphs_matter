@@ -27,7 +27,7 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("device", help="print the device runs will use")
-    sub.add_parser("fetch", help="download any missing raw sources into data/raw")
+    sub.add_parser("fetch", help="download any missing raw sources into $GHELPS_DATA/raw")
 
     b = sub.add_parser("build", help="fetch + build graphs, structural stats, edge vectors, features, splits")
     b.add_argument("--steps", nargs="+", choices=["graphs", "structure", "edge_attr", "features", "splits"],
@@ -80,7 +80,8 @@ def main() -> None:
         best = None
         if not a.no_tuned and params.exists():
             best = yaml.safe_load(open(params))
-            print(f"tuned params: {params} ({sum(len(v) for v in best.values())} model/loss pairs)")
+            n = sum(len(c) for m in best.values() for c in m.values() if isinstance(c, dict))
+            print(f"tuned params: {params} ({n} model/loss/condition sets)")
         else:
             print("tuned params: none, using ghelps.train.DEFAULTS")
         print(f"device={device.get()} workers={workers}", flush=True)

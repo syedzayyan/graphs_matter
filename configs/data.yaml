@@ -1,7 +1,5 @@
 # Stage-1 data build. Every downstream artefact is derived from these choices.
-paths:
-  raw: data/raw
-  out: data/processed
+# Data location: $GHELPS_DATA (default <repo>/data), see ghelps/paths.py.
 
 graphs:
   string:
@@ -34,7 +32,7 @@ universes:
   huri: [string, string_exp, intact, reactome_fi, huri]
 
 splits:
-  n_seeds: 5
+  n_seeds: 7                      # 0-4 evaluation (experiment configs), 5-6 tuning only (tune.yaml)
   leiden_resolution: 5.0     # ~70-85 communities, none > 5% of genes
   leiden_seed: 0
   recent_from_year: 2021          # rcnt stand-in: first Minikel launch >= this year

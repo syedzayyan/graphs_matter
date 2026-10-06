@@ -15,10 +15,10 @@ import pandas as pd
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ghelps import labels, splits, structure  # noqa: E402
+from ghelps import labels, paths, splits, structure  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-P = ROOT / "data" / "processed"
+P = paths.PROCESSED
 cfg = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))
 sc = cfg["splits"]
 

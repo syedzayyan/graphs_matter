@@ -1,11 +1,12 @@
-# Optuna tuning (tune.py). Train/val folds of the real graph only; test is never seen.
+# Optuna tuning (tune.py). One study per (model, loss, graph condition: real / rewired /
+# empty / none). Train/val folds of the tuning seeds only; test folds are never seen.
 out: results/tuning
 universe: main
 graph: string
 labels: minikel
 split: random
-seeds: [0, 1]              # objective = mean val AUPRC over these split seeds
-trials: 60                 # per (model, loss) study
+seeds: [5, 6]              # dedicated tuning split seeds, never used for evaluation (0-4)
+trials: 60                 # per (model, loss, graph condition) study
 timeout_per_study: 14400   # seconds
 sampler_seed: 0
 models: [deg_lr, rf_struct, labelprop, mlp_feat, rf_feat, mlp_feat_struct, rf_feat_struct,

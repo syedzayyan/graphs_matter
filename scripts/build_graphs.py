@@ -16,11 +16,11 @@ import pandas as pd
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ghelps import graphs  # noqa: E402
+from ghelps import graphs, paths  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 cfg = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))
-out = ROOT / cfg["paths"]["out"] / "graphs"
+out = paths.PROCESSED / "graphs"
 out.mkdir(parents=True, exist_ok=True)
 
 edges = graphs.build_all(cfg)

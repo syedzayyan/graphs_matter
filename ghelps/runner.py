@@ -21,22 +21,41 @@ ROOT = Path(__file__).resolve().parents[1]
 AXES = ["universe", "graph", "copy", "labels", "split", "seed", "model", "loss"]
 
 
+def tuning_condition(copy: str | None) -> str:
+    """Which tuned parameter set a graph condition uses (see tune.py)."""
+    if copy is None:
+        return "none"
+    if copy.startswith("rw"):
+        return "rewired"
+    return "empty" if copy == "empty" else "real"  # shufattr reuses the real graph's params
+
+
+def tuned_params(best: dict, model: str, loss: str, copy: str | None) -> dict:
+    """best_params.yaml lookup: {model: {loss: {condition: params}}}. A missing entry means
+    DEFAULTS; params from another condition are never borrowed."""
+    per_cond = best.get(model, {}).get(loss, {})
+    if per_cond and not set(per_cond) & {"real", "rewired", "empty", "none"}:
+        raise ValueError("best_params.yaml is in the old per-(model, loss) format; re-run tune.py "
+                         "(v2 studies tune per graph condition) or pass --no-tuned")
+    params = per_cond.get(tuning_condition(copy), {})
+    return {k: v for k, v in params.items() if not k.startswith("_")}
+
+
 def expand(exp: dict, best: dict | None = None) -> list[dict]:
-    """Grid -> run configs. Hyperparameters: tuned best params for (model, loss) if given,
-    then the experiment's own `hparams` on top."""
+    """Grid -> run configs. Hyperparameters: the tuned params for (model, loss, graph
+    condition) if given, then the experiment's own `hparams` on top."""
     from ghelps.train import LADDER
     grid = exp["grid"]
     best = best or {}
     runs, seen = [], set()
     for combo in itertools.product(*(grid[a] for a in AXES)):
         r = dict(zip(AXES, combo))
-        tuned = best.get(r["model"], {}).get(r["loss"], {})
-        r.update({k: v for k, v in tuned.items() if not k.startswith("_")}, **exp.get("hparams", {}))
         conditions = LADDER[r["model"]][2]
         if not conditions:                     # graph-free: one run per (labels, split, seed, loss)
             r["graph"], r["copy"] = None, None
         elif r["copy"] not in conditions:      # e.g. shuffled edge vectors for a non-edge model
             continue
+        r.update(tuned_params(best, r["model"], r["loss"], r["copy"]), **exp.get("hparams", {}))
         key = run_id(r)
         if key not in seen:
             seen.add(key)
@@ -107,6 +126,9 @@ def run(exp: dict, workers: int, best: dict | None = None) -> Path:
     for d in ("runs", "scores"):
         (out / d).mkdir(parents=True, exist_ok=True)
     runs = expand(exp, best)
+    # results.csv / summaries only cover the current grid, not runs left over from an earlier
+    # grid or earlier tuned params (their run ids differ via the hyperparameter hash)
+    (out / "manifest.txt").write_text("\n".join(run_id(r) for r in runs) + "\n")
     # slowest first so the pool drains evenly
     runs.sort(key=lambda r: r["model"].startswith("gat"), reverse=True)
     print(f"{len(runs)} runs -> {out}", flush=True)
@@ -120,10 +142,19 @@ def run(exp: dict, workers: int, best: dict | None = None) -> Path:
 
 
 def collect(out: Path) -> pd.DataFrame:
-    """All finished runs -> <out>/results.csv, one row per run x evaluation regime, with the
-    full config (incl. hyperparameters) and run-level extras (degree dependence, GP shares)."""
+    """Finished runs of the current grid (manifest.txt) -> <out>/results.csv, one row per
+    run x evaluation regime, with the full config (incl. hyperparameters) and run-level
+    extras (degree dependence, GP shares)."""
     rows = []
-    for f in sorted((out / "runs").glob("*.json")):
+    manifest = out / "manifest.txt"
+    files = sorted((out / "runs").glob("*.json"))
+    if manifest.exists():
+        keep = set(manifest.read_text().split())
+        stale = [f for f in files if f.stem not in keep]
+        files = [f for f in files if f.stem in keep]
+        if stale:
+            print(f"collect: ignoring {len(stale)} runs not in the current grid", flush=True)
+    for f in files:
         r = json.loads(f.read_text())
         c = r["config"]
         hp = {k: v for k, v in c.items() if k not in AXES}

@@ -1,4 +1,4 @@
-"""Download every raw source into data/raw. Each entry is (path, fetcher); files that
+"""Download every raw source into $GHELPS_DATA/raw (default <repo>/data/raw). Each entry is (path, fetcher); files that
 already exist are skipped, so this is safe to re-run and resumes after interruption."""
 from __future__ import annotations
 
@@ -12,8 +12,10 @@ from pathlib import Path
 
 import pandas as pd
 
+from ghelps import paths
+
 ROOT = Path(__file__).resolve().parents[1]
-RAW = ROOT / "data" / "raw"
+RAW = paths.RAW
 
 OT_RELEASE = "26.09"
 OT = f"https://ftp.ebi.ac.uk/pub/databases/opentargets/platform/{OT_RELEASE}/output"

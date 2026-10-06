@@ -15,9 +15,8 @@
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
+source scripts/hpc/env.sh   # GHELPS_DATA on scratch
 
-export PYTHONUNBUFFERED=1
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 CONFIG="${1:-configs/exp_headline.yaml}"
 
 uv sync --frozen

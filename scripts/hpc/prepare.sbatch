@@ -6,10 +6,10 @@
 #SBATCH -t 12:0:0
 #SBATCH --mem-per-cpu=4G
 
-# Fetch all raw sources (~2.5 GB incl. the IntAct human archive, filtered then deleted)
+# Fetch all raw sources into $GHELPS_DATA (scratch, see env.sh; ~2.5 GB, the IntAct archive is filtered then deleted)
 # and build data/processed. Idempotent: anything already present is skipped.
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR}"
-export PYTHONUNBUFFERED=1
+source scripts/hpc/env.sh   # GHELPS_DATA on scratch
 uv sync --frozen
 uv run python main.py build

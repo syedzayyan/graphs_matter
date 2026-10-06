@@ -9,11 +9,11 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ghelps import features  # noqa: E402
+from ghelps import features, paths  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-G = ROOT / "data" / "processed" / "graphs"
-OUT = ROOT / "data" / "processed" / "features"
+G = paths.PROCESSED / "graphs"
+OUT = paths.PROCESSED / "features"
 
 blocks = {
     "go": features.go(),

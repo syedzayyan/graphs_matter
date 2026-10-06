@@ -4,3 +4,4 @@ results/
 .venv/
 __pycache__/
 ghelps.egg-info
+data
