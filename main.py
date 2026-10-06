@@ -41,6 +41,7 @@ def main() -> None:
     r.add_argument("--params", default="results/tuning/best_params.yaml",
                    help="tuned hyperparameters from tune.py (used if the file exists)")
     r.add_argument("--no-tuned", action="store_true", help="ignore tuned params, use DEFAULTS")
+    r.add_argument("--shard", default="0/1", help="run only shard i of n of the grid, e.g. 3/8 (HPC arrays)")
 
     s = sub.add_parser("summarise", help="aggregate an experiment's results")
     s.add_argument("exp")
@@ -85,7 +86,8 @@ def main() -> None:
         else:
             print("tuned params: none, using ghelps.train.DEFAULTS")
         print(f"device={device.get()} workers={workers}", flush=True)
-        runner.run(exp, workers, best)
+        i, n = map(int, a.shard.split("/"))
+        runner.run(exp, workers, best, shard=(i, n))
 
     elif a.cmd == "summarise":
         sys.argv = ["summarise.py", a.exp, a.metric]

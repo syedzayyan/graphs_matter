@@ -45,6 +45,10 @@ Other commands:
 - **Objective:** mean val AUPRC over the dedicated tuning split seeds 5–6. These seeds are never evaluated; experiments use seeds 0–4, and test folds are never touched.
 - **Selection bias:** the stored `_val_auprc` is a max over trials, so it is optimistic. Don't compare it across models.
 - **Cluster:** `scripts/hpc/tune.sbatch` runs one array task per (model, condition) pair.
+- **Limitations:**
+  - Parameters are tuned on `main`/`string` with the full feature set. They are reused for `string_exp`, the HuRI universe and `no_tract`.
+  - Tuning uses the random split only.
+- **Cluster grids:** large grids run as disjoint shards (`main.py run … --shard i/n`, `scripts/hpc/run.sbatch` array). `submit_all.sh` chains prepare → tune → headline + HuRI → summarise.
 - **Result filtering:** `main.py run` writes `manifest.txt`, so `results.csv` only covers the current grid and never mixes in older runs.
 
 ## Data decisions
@@ -62,11 +66,23 @@ Symbols map approved > previous > alias, with ambiguous previous/alias symbols d
 | reactome_fi | Reactome FI 2025-04-14 | including predicted FIs |
 | huri | HuRI | as published |
 
+**STRING overlaps with the features.** STRING's combined score includes two channels that overlap with information the models get elsewhere:
+- **Database channel:** imports curated pathways (KEGG, Reactome), so STRING ≥ 700 edges partly duplicate the Reactome pathway features.
+- **Text-mining channel:** links genes co-mentioned in papers, which includes drug targets named together.
+
+Both channels are also among the 7 dimensions of the edge vectors. STRING-experimental (`string_exp`, experiments channel only) is the clean comparison and runs alongside STRING in the headline.
+
 **Universes.**
 - `main`: the intersection of the four non-HuRI graphs, 9,515 genes.
 - `huri`: the five-way intersection, 4,882 genes. It is used for the HuRI study-bias test, with all five graphs on the same genes.
 
 HuRI is a Y2H screen that misses most membrane proteins. Putting it in the main intersection would have cut the Minikel positives from 540 to 195.
+
+**HuRI coverage.** HuRI under-covers the positives. Y2H is weak on membrane proteins (GPCRs, ion channels, transporters), so HuRI contains only 31.8% of the 702 Minikel positives, and 17.4% of those are isolated in the `huri` universe. `results/coverage_table.csv` reports positive coverage, isolated-positive fraction and positive vs unlabelled median degree for every graph and universe.
+
+In the main universe, positives have about twice the median degree of unlabelled genes in STRING (38 vs 17) and Reactome FI (28 vs 15). In STRING-exp (5.5 vs 6) and IntAct (7 vs 8) they don't. That points to curation and text-mining study bias rather than biology.
+
+The HuRI analysis (`configs/exp_huri.yaml`) therefore runs on the HuRI-covered genes, with every other graph randomly subsampled to HuRI's edge count (`<graph>_em`, 18,081 edges, with its own rewired copies). This rules out "fewer edges" as the explanation for a smaller graph effect. It does not fix HuRI missing the membrane targets.
 
 **Rewiring.** 3 copies per graph, made with igraph double-edge swaps (10 × |E| swaps). Degree sequences are asserted equal, and only 2–6% of the original edges survive.
 
@@ -76,7 +92,10 @@ HuRI is a Y2H screen that misses most membrane proteins. Putting it in the main 
 - **GO (GOA human):** excludes `IPI` evidence and GO:0005515 "protein binding", because both are interaction data and would leak the graph into the features.
 - **Pfam:** from UniProt reviewed entries.
 - **Reactome pathways:** sets of 5–500 genes.
-- **Open Targets tractability:** drops the Approved Drug, Advanced Clinical and Phase 1 Clinical buckets, because they encode the label.
+- **Open Targets tractability:** drops the Approved Drug, Advanced Clinical and Phase 1 Clinical buckets for every modality, because they restate clinical phase and so encode the label.
+  - **Kept:** non-clinical buckets such as Druggable Family, High-Quality Ligand/Pocket, Structure with Ligand, UniProt/GO/HPA location, Small Molecule Binder and Literature.
+  - **Caveat:** these partly reflect past drug programmes. Druggable Family overlaps with how the Finan tiers were built.
+  - **Ablation:** every feature model also runs with tractability removed (`feats: no_tract`).
 
 **Splits.** 5 seeds each, 70/10/20 train/val/test:
 - `random`: stratified.
@@ -110,7 +129,7 @@ On rewired copies the real vectors are permuted onto the new edges.
 ## Models
 
 - **Library implementations:**
-  - PyTorch Geometric: `MLP`, `GCN`, `GAT` (GATv2 with `edge_dim` for edge vectors), `LabelPropagation`, `CorrectAndSmooth`, the `SIGN` transform, and `AddLaplacianEigenvectorPE`.
+  - PyTorch Geometric: `MLP`, `GCN`, `GraphSAGE` (mean aggregation), `GAT` (GATv2 with `edge_dim` for edge vectors), `LabelPropagation`, `CorrectAndSmooth`, the `SIGN` transform, and `AddLaplacianEigenvectorPE`.
   - scikit-learn: `RandomForestClassifier`.
   - gpytorch: `ExactGP` with an `AdditiveKernel` of `ScaleKernel(RBFKernel(active_dims=block))`. The blocks are own GO, Pfam, pathway and tractability (32-d SVD each), log-degree, topology (16 Laplacian eigenvectors) and 2-hop neighbour features. The per-block share of the predictive mean comes from `prediction_strategy.mean_cache`.
 - **Training:**

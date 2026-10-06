@@ -26,6 +26,10 @@ from ghelps import paths, structure
 ROOT = Path(__file__).resolve().parents[1]
 P = paths.PROCESSED
 FEATURE_BLOCKS = ("go", "pfam", "pathway", "tract")
+# Feature sets (experiment axis `feats`). no_tract drops Open Targets tractability entirely:
+# even its non-clinical buckets (druggable family, ligands, pockets) partly reflect past
+# drug programmes, so every result should also hold without it.
+FEATURE_SETS = {"all": FEATURE_BLOCKS, "no_tract": ("go", "pfam", "pathway")}
 SVD_DIM = 256
 GP_BLOCK_DIM = 32
 GP_TOPO_DIM = 16
@@ -42,6 +46,7 @@ class Problem:
     universe: str
     graph: str | None
     copy: str
+    feats: str
     genes: list[str]
     y: np.ndarray                  # 1 positive / 0 unlabelled (split-specific)
     fold: np.ndarray               # train / val / test / excluded
@@ -79,8 +84,8 @@ def _svd(universe: str, blocks, dim: int, tag: str) -> np.ndarray:
 
 
 @lru_cache(maxsize=4)
-def features(universe: str) -> np.ndarray:
-    return _svd(universe, FEATURE_BLOCKS, SVD_DIM, "all")
+def features(universe: str, feats: str = "all") -> np.ndarray:
+    return _svd(universe, FEATURE_SETS[feats], SVD_DIM, feats)
 
 
 def _edges(universe: str, graph: str, copy: str) -> tuple[np.ndarray, np.ndarray]:
@@ -104,7 +109,8 @@ def _struct(universe: str, graph: str, copy: str) -> tuple[np.ndarray, np.ndarra
     return _z(x.values).astype(np.float32), df.degree.values
 
 
-def load(universe: str, graph: str | None, copy: str, labels: str, split: str, seed: int) -> Problem:
+def load(universe: str, graph: str | None, copy: str, labels: str, split: str, seed: int,
+         feats: str = "all") -> Problem:
     genes = genes_of(universe)
     sdir = P / "splits" / universe / labels / split
     s = pd.read_parquet(sdir / f"seed{seed}.parquet")
@@ -115,15 +121,15 @@ def load(universe: str, graph: str | None, copy: str, labels: str, split: str, s
         ei, ea = to_undirected(torch.as_tensor(e.T, dtype=torch.long), torch.as_tensor(a),
                                num_nodes=len(genes))
         st, deg = _struct(universe, graph, copy)
-    return Problem(universe, graph, copy, genes, s.y.values, s.fold.values, ei, ea, st, deg,
-                   features(universe), neg)
+    return Problem(universe, graph, copy, feats, genes, s.y.values, s.fold.values, ei, ea, st, deg,
+                   features(universe, feats), neg)
 
 
 def gp_inputs(p: Problem) -> tuple[np.ndarray, dict[str, list[int]]]:
     """Column blocks for the additive GP: own feature blocks (per-block SVD), log-degree,
     topology (Laplacian eigenvectors, PyG transform) and 2-hop neighbour features (SIGN)."""
     from ghelps.models import sign_features
-    parts = {b: _svd(p.universe, (b,), GP_BLOCK_DIM, b) for b in FEATURE_BLOCKS}
+    parts = {b: _svd(p.universe, (b,), GP_BLOCK_DIM, b) for b in FEATURE_SETS[p.feats]}
     own = np.hstack(list(parts.values()))
     parts["degree"] = _z(np.log1p(p.raw_degree)[:, None]).astype(np.float32)
     cache = P / "structure" / p.universe / f"lappe{GP_TOPO_DIM}_{p.graph}.{p.copy}.npy"

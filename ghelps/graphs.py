@@ -108,3 +108,23 @@ def rewire(edge_index: np.ndarray, n: int, swaps_per_edge: int, seed: int) -> np
     out = np.array(g.get_edgelist(), dtype=np.int64)
     assert (np.bincount(out.ravel(), minlength=n) == np.bincount(edge_index.ravel(), minlength=n)).all()
     return np.sort(out, axis=1)
+
+
+EM_SUFFIX = "_em"
+
+
+def universe_graphs(cfg: dict, universe: str) -> list[str]:
+    """Every graph built on a universe: its member graphs plus any edge-matched copies."""
+    out = list(cfg["universes"][universe])
+    em = cfg.get("edge_matched")
+    if em and em["universe"] == universe:
+        out += [g + EM_SUFFIX for g in em["graphs"]]
+    return out
+
+
+def subsample_edges(edge_index: np.ndarray, m: int, seed: int) -> np.ndarray:
+    """Uniform random subset of m edges (all of them if the graph has <= m)."""
+    if len(edge_index) <= m:
+        return edge_index
+    keep = np.random.default_rng(seed).choice(len(edge_index), size=m, replace=False)
+    return edge_index[np.sort(keep)]

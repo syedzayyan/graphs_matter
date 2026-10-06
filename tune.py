@@ -49,6 +49,7 @@ SPACES = {
     "linear": lambda t, loss: {"lr": t.suggest_float("lr", 3e-4, 3e-2, log=True),
                                "wd": t.suggest_float("wd", 1e-6, 5e-2, log=True)},
     "mlp": lambda t, loss: NN(t), "sign": lambda t, loss: NN(t), "gcn": lambda t, loss: NN(t),
+    "sage": lambda t, loss: NN(t),
     "gat": lambda t, loss: GAT(t), "gat_e": lambda t, loss: GAT(t),
     "cs": lambda t, loss: {**NN(t), "cs_alpha": t.suggest_float("cs_alpha", 0.3, 0.99),
                            "cs_layers": t.suggest_int("cs_layers", 5, 50)},

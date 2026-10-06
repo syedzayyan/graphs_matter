@@ -31,6 +31,15 @@ universes:
   main: [string, string_exp, intact, reactome_fi]
   huri: [string, string_exp, intact, reactome_fi, huri]
 
+# Edge-matched copies for the HuRI study-bias test: within the huri universe, each graph is
+# randomly subsampled to HuRI's edge count, so "less signal on HuRI" can't just be "fewer
+# edges". Built as <graph>_em (+ rewired copies) alongside the full graphs.
+edge_matched:
+  universe: huri
+  reference: huri
+  graphs: [string, string_exp, intact, reactome_fi]
+  seed: 0
+
 splits:
   n_seeds: 7                      # 0-4 evaluation (experiment configs), 5-6 tuning only (tune.yaml)
   leiden_resolution: 5.0     # ~70-85 communities, none > 5% of genes

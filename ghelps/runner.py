@@ -18,7 +18,8 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-AXES = ["universe", "graph", "copy", "labels", "split", "seed", "model", "loss"]
+AXES = ["universe", "graph", "copy", "labels", "feats", "split", "seed", "model", "loss"]
+AXIS_DEFAULTS = {"feats": ["all"]}  # axes an experiment config may omit
 
 
 def tuning_condition(copy: str | None) -> str:
@@ -32,7 +33,8 @@ def tuning_condition(copy: str | None) -> str:
 
 def tuned_params(best: dict, model: str, loss: str, copy: str | None) -> dict:
     """best_params.yaml lookup: {model: {loss: {condition: params}}}. A missing entry means
-    DEFAULTS; params from another condition are never borrowed."""
+    DEFAULTS; params from another condition are never borrowed. Params are tuned on the full
+    feature set and reused for feature ablations (feats=no_tract)."""
     per_cond = best.get(model, {}).get(loss, {})
     if per_cond and not set(per_cond) & {"real", "rewired", "empty", "none"}:
         raise ValueError("best_params.yaml is in the old per-(model, loss) format; re-run tune.py "
@@ -45,11 +47,14 @@ def expand(exp: dict, best: dict | None = None) -> list[dict]:
     """Grid -> run configs. Hyperparameters: the tuned params for (model, loss, graph
     condition) if given, then the experiment's own `hparams` on top."""
     from ghelps.train import LADDER
-    grid = exp["grid"]
+    from ghelps.train import uses_features
+    grid = {**AXIS_DEFAULTS, **exp["grid"]}
     best = best or {}
     runs, seen = [], set()
     for combo in itertools.product(*(grid[a] for a in AXES)):
         r = dict(zip(AXES, combo))
+        if r["feats"] != "all" and not uses_features(r["model"]):
+            continue                           # feature ablation is moot for feature-free models
         conditions = LADDER[r["model"]][2]
         if not conditions:                     # graph-free: one run per (labels, split, seed, loss)
             r["graph"], r["copy"] = None, None
@@ -82,7 +87,8 @@ def execute(r: dict, out: Path) -> str:
     t0 = time.time()
     try:
         hp = {k: v for k, v in r.items() if k not in AXES}
-        p = data.load(r["universe"], r["graph"], r["copy"] or "real", r["labels"], r["split"], r["seed"])
+        p = data.load(r["universe"], r["graph"], r["copy"] or "real", r["labels"], r["split"], r["seed"],
+                      feats=r["feats"])
         s, extras = train.score(p, r["model"], r["loss"], r["seed"], **hp)
         metrics = evaluate.by_regime(s, p.negatives)
         # degree dependence is always measured against the *real* graph's degree so that
@@ -121,7 +127,9 @@ def _gp_summary(extras: dict, s: np.ndarray, p) -> dict:
             "gp_sd_vs_pubmed": float(spearmanr(sd[te], pubmed[te]).statistic)}
 
 
-def run(exp: dict, workers: int, best: dict | None = None) -> Path:
+def run(exp: dict, workers: int, best: dict | None = None, shard: tuple[int, int] = (0, 1)) -> Path:
+    """Run the grid (or shard i of n of it, for HPC array jobs; shards are disjoint and
+    together cover the grid). Finished runs are skipped, so re-running resumes."""
     out = ROOT / "results" / exp["name"]
     for d in ("runs", "scores"):
         (out / d).mkdir(parents=True, exist_ok=True)
@@ -129,6 +137,8 @@ def run(exp: dict, workers: int, best: dict | None = None) -> Path:
     # results.csv / summaries only cover the current grid, not runs left over from an earlier
     # grid or earlier tuned params (their run ids differ via the hyperparameter hash)
     (out / "manifest.txt").write_text("\n".join(run_id(r) for r in runs) + "\n")
+    i, n = shard
+    runs = runs[i::n]
     # slowest first so the pool drains evenly
     runs.sort(key=lambda r: r["model"].startswith("gat"), reverse=True)
     print(f"{len(runs)} runs -> {out}", flush=True)
@@ -137,7 +147,8 @@ def run(exp: dict, workers: int, best: dict | None = None) -> Path:
         futs = [ex.submit(execute, r, out) for r in runs]
         for i, f in enumerate(as_completed(futs), 1):
             print(f"[{i}/{len(runs)}] {f.result()}", flush=True)
-    collect(out)
+    if n == 1:  # sharded runs are collected once at the end (main.py summarise)
+        collect(out)
     return out
 
 

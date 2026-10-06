@@ -5,6 +5,7 @@ Outputs (data/processed/graphs/):
   <universe>/genes.txt            universe ordering (ENSG), defines node indices everywhere
   <universe>/<graph>.real.npy     (m, 2) node-index edges on the universe
   <universe>/<graph>.rw{k}.npy    rewired copies
+  <em-universe>/<graph>_em.*.npy  edge-matched subsamples (configs/data.yaml: edge_matched)
   summary.tsv
 """
 import sys
@@ -49,6 +50,27 @@ for uname, members in cfg["universes"].items():
             r = graphs.rewire(ei, len(genes), rw["swaps_per_edge"], seed=seed)
             np.save(udir / f"{name}.rw{k}.npy", r)
             # fraction of original edges that survived the swaps
+            row[f"rw{k}_overlap"] = sum(tuple(t) in orig for t in r) / len(r)
+        rows.append(row)
+
+em = cfg.get("edge_matched")
+if em:
+    udir = out / em["universe"]
+    genes = (udir / "genes.txt").read_text().split()
+    m_ref = len(np.load(udir / f"{em['reference']}.real.npy"))
+    for name in em["graphs"]:
+        derived = name + graphs.EM_SUFFIX
+        ei = graphs.subsample_edges(np.load(udir / f"{name}.real.npy"), m_ref,
+                                    seed=em["seed"] + zlib.crc32(derived.encode()) % 997)
+        np.save(udir / f"{derived}.real.npy", ei)
+        deg = np.bincount(ei.ravel(), minlength=len(genes))
+        row = dict(graph=derived, universe=em["universe"], n_genes=len(genes), univ_edges=len(ei),
+                   isolated=int((deg == 0).sum()), mean_deg=deg.mean(), max_deg=int(deg.max()))
+        orig = set(map(tuple, ei))
+        for k in range(rw["n_copies"]):
+            seed = rw["seed"] + 1000 * k + zlib.crc32(f"{em['universe']}/{derived}".encode()) % 997
+            r = graphs.rewire(ei, len(genes), rw["swaps_per_edge"], seed=seed)
+            np.save(udir / f"{derived}.rw{k}.npy", r)
             row[f"rw{k}_overlap"] = sum(tuple(t) in orig for t in r) / len(r)
         rows.append(row)
 

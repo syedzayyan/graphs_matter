@@ -10,5 +10,5 @@ trials: 60                 # per (model, loss, graph condition) study
 timeout_per_study: 14400   # seconds
 sampler_seed: 0
 models: [deg_lr, rf_struct, labelprop, mlp_feat, rf_feat, mlp_feat_struct, rf_feat_struct,
-         sign_feat, cs_feat, gcn_none, gcn_feat, gat_none, gat_feat, gat_edge_feat, gp]
+         sign_feat, cs_feat, gcn_none, gcn_feat, sage_feat, gat_none, gat_feat, gat_edge_feat, gp]
 losses: [nnpu, pn]

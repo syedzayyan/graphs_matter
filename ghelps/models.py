@@ -4,7 +4,7 @@ from __future__ import annotations
 import torch
 from torch_geometric.data import Data
 from torch_geometric.nn import CorrectAndSmooth, LabelPropagation
-from torch_geometric.nn.models import GAT, GCN, MLP
+from torch_geometric.nn.models import GAT, GCN, MLP, GraphSAGE
 from torch_geometric.transforms import SIGN
 
 
@@ -17,6 +17,12 @@ def mlp(d_in: int, hidden: int, layers: int, dropout: float) -> MLP:
 
 def gcn(d_in: int, hidden: int, layers: int, dropout: float) -> GCN:
     return GCN(d_in, hidden, layers, out_channels=1, dropout=dropout)
+
+
+def sage(d_in: int, hidden: int, layers: int, dropout: float) -> GraphSAGE:
+    # SAGEConv with mean aggregation (PyG default): W1·x_i + W2·mean_j(x_j), so the node's
+    # own features keep a separate weight; on the empty graph it reduces to an MLP
+    return GraphSAGE(d_in, hidden, layers, out_channels=1, dropout=dropout)
 
 
 def gat(d_in: int, hidden: int, layers: int, dropout: float, heads: int = 4,

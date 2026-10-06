@@ -36,12 +36,18 @@ LADDER = {
     "gcn_none":        ("gcn",    ["ones"],            STRUCT),
     "gcn_feat":        ("gcn",    ["feat"],            PROP),
     "gat_none":        ("gat",    ["ones"],            STRUCT),
+    "sage_feat":       ("sage",   ["feat"],            PROP),
     "gat_feat":        ("gat",    ["feat"],            PROP),
     "gat_edge_feat":   ("gat_e",  ["feat"],            EDGE),
     "gp":              ("gp",     [],                  STRUCT),
 }
 
 # Every tunable knob, with the defaults used when no tuned value exists (see tune.py).
+def uses_features(model: str) -> bool:
+    kind, blocks, _ = LADDER[model]
+    return "feat" in blocks or kind == "gp"
+
+
 DEFAULTS = dict(hidden=64, layers=2, dropout=0.5, lr=0.01, wd=5e-4, epochs=300, patience=30,
                 min_epochs=100, prior=0.1, heads=4,
                 rf_trees=500, rf_leaf=5, rf_max_features="sqrt",
@@ -145,6 +151,9 @@ def score(p: Problem, model: str, loss: str, seed: int, **over) -> tuple[np.ndar
         forward = lambda: net(xs).squeeze(-1)  # noqa: E731
     elif kind == "gcn":
         net = models.gcn(x.size(1), hp["hidden"], hp["layers"], hp["dropout"])
+        forward = lambda: net(x, ei).squeeze(-1)  # noqa: E731
+    elif kind == "sage":
+        net = models.sage(x.size(1), hp["hidden"], hp["layers"], hp["dropout"])
         forward = lambda: net(x, ei).squeeze(-1)  # noqa: E731
     elif kind == "gat":
         net = models.gat(x.size(1), hp["hidden"], hp["layers"], hp["dropout"], heads=hp["heads"])

@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -J ghelps_tune
-#SBATCH -o %x.o%A_%a
+#SBATCH -o results/logs/%x.o%A_%a
 #SBATCH -p andrena
 #SBATCH -A pilot_andrena
 #SBATCH -n 12
@@ -8,9 +8,9 @@
 #SBATCH -t 24:0:0
 #SBATCH --mem-per-cpu=7500M
 #SBATCH --gres=gpu:1
-#SBATCH --array=0-32
+#SBATCH --array=0-35
 
-# One array task per (model, graph condition) pair from configs/tune.yaml (33 pairs);
+# One array task per (model, graph condition) pair from configs/tune.yaml (36 pairs; submit_all.sh sets --array from task_list());
 # each task tunes both losses. All tasks share results/tuning/optuna.db, so resubmitting
 # resumes unfinished studies. If configs/tune.yaml's model list changes, update --array
 # (the task list is printed by: uv run python -c "from tune import task_list; print(task_list())").

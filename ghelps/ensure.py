@@ -29,15 +29,20 @@ def _universes() -> dict[str, list[str]]:
 def _done(step: str) -> bool:
     u = _universes()
     if step == "graphs":
-        return (P / "graphs" / "summary.tsv").exists() and all((P / "graphs" / n / "genes.txt").exists() for n in u)
+        from ghelps.graphs import universe_graphs
+        cfg = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))
+        return (P / "graphs" / "summary.tsv").exists() and all(
+            (P / "graphs" / n / f"{g}.real.npy").exists() for n in u for g in universe_graphs(cfg, n))
     if step == "structure":
         want = [g.name.replace(".npy", ".parquet") for n in u for g in (P / "graphs" / n).glob("*.npy")
                 if ".empty." not in g.name]
         return bool(want) and all((P / "structure" / n / w).exists() for n in u for w in want
                                   if (P / "graphs" / n / w.replace(".parquet", ".npy")).exists())
     if step == "edge_attr":
+        from ghelps.graphs import universe_graphs
+        cfg = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))
         return all((P / "edge_attr" / n / f"{g}.shufattr.npy").exists() and
-                   (P / "graphs" / n / f"{g}.empty.npy").exists() for n, gs in u.items() for g in gs)
+                   (P / "graphs" / n / f"{g}.empty.npy").exists() for n in u for g in universe_graphs(cfg, n))
     if step == "features":
         return all((P / "features" / n / "pubmed.parquet").exists() for n in u)
     if step == "splits":
@@ -66,8 +71,11 @@ def build(steps: list[str] | None = None, force: bool = False) -> None:
     else:
         first = next((i for i, s in enumerate(STEPS) if not _done(s)), None)
         todo = [] if first is None else STEPS[first:]
-    if "graphs" in todo and not force:
-        shutil.rmtree(P, ignore_errors=True)  # everything downstream is keyed to the graphs
+    fresh = not all((P / "graphs" / n / "genes.txt").exists() for n in _universes())
+    if "graphs" in todo and fresh and not force:
+        shutil.rmtree(P, ignore_errors=True)  # partial first build: start clean
+    # otherwise build steps are deterministic and rewrite identical files; structure stats
+    # (the slow step) skip graphs that already have them
     for step in todo:
         print(f"[build] {step}", flush=True)
         runpy.run_path(str(ROOT / "scripts" / f"build_{step}.py"), run_name="__main__")

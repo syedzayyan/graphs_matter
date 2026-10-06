@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -J ghelps_prepare
-#SBATCH -o %x.o%j
+#SBATCH -o results/logs/%x.o%j
 #SBATCH -p compute
 #SBATCH -n 8
 #SBATCH -t 12:0:0

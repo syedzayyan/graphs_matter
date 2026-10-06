@@ -31,7 +31,8 @@ cfg = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))
 links = graphs._string_links_full(cfg, CHANNELS)
 raw = {g: pd.read_csv(P / "graphs" / f"{g}.raw.tsv", sep="\t") for g in graphs.GRAPHS}
 
-for uname, members in cfg["universes"].items():
+for uname in cfg["universes"]:
+    members = graphs.universe_graphs(cfg, uname)
     genes = (P / "graphs" / uname / "genes.txt").read_text().split()
     n = len(genes)
     pos = {g: i for i, g in enumerate(genes)}
