@@ -9,6 +9,7 @@ Graph conditions written next to the real/rewired edge lists in data/processed/g
   <g>.empty.npy       no edges (same model, graph removed)
 Edge attributes in data/processed/edge_attr/<u>/<g>.<copy>.npy, row-aligned with the edges:
   real      true vectors
+  pwsub     true vectors of the pathway-subgraph edges
   rw{k}     the real vectors randomly permuted onto the rewired edges (attribute
             distribution kept, attachment to topology destroyed)
   shufattr  real topology, real vectors permuted across its edges
@@ -52,15 +53,18 @@ for uname in cfg["universes"]:
 
     out = P / "edge_attr" / uname
     out.mkdir(parents=True, exist_ok=True)
-    for g in members:
-        rng = np.random.default_rng(0)
-        ei = np.load(P / "graphs" / uname / f"{g}.real.npy")
+    def lookup(ei):
         k = keys(ei[:, 0], ei[:, 1])
-        attr = np.hstack([
+        return np.hstack([
             string_attr.reindex(k).fillna(0).values,
             np.stack([np.isin(k, list(member[h])) for h in graphs.GRAPHS], axis=1),
         ]).astype(np.float32)
+
+    for g in members:
+        rng = np.random.default_rng(0)
+        attr = lookup(np.load(P / "graphs" / uname / f"{g}.real.npy"))
         np.save(out / f"{g}.real.npy", attr)
+        np.save(out / f"{g}.pwsub.npy", lookup(np.load(P / "graphs" / uname / f"{g}.pwsub.npy")))
         np.save(out / f"{g}.shufattr.npy", attr[rng.permutation(len(attr))])
         for rw in sorted((P / "graphs" / uname).glob(f"{g}.rw*.npy")):
             m = len(np.load(rw))

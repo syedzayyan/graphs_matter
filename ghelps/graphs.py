@@ -110,21 +110,15 @@ def rewire(edge_index: np.ndarray, n: int, swaps_per_edge: int, seed: int) -> np
     return np.sort(out, axis=1)
 
 
-EM_SUFFIX = "_em"
-
 
 def universe_graphs(cfg: dict, universe: str) -> list[str]:
-    """Every graph built on a universe: its member graphs plus any edge-matched copies."""
-    out = list(cfg["universes"][universe])
-    em = cfg.get("edge_matched")
-    if em and em["universe"] == universe:
-        out += [g + EM_SUFFIX for g in em["graphs"]]
-    return out
+    """Graphs built on a universe (one per universe in the current design)."""
+    return list(cfg["universes"][universe])
 
 
-def subsample_edges(edge_index: np.ndarray, m: int, seed: int) -> np.ndarray:
-    """Uniform random subset of m edges (all of them if the graph has <= m)."""
-    if len(edge_index) <= m:
-        return edge_index
-    keep = np.random.default_rng(seed).choice(len(edge_index), size=m, replace=False)
-    return edge_index[np.sort(keep)]
+def pathway_subgraph(edge_index: np.ndarray, membership) -> np.ndarray:
+    """Edges whose two endpoints share at least one pathway (membership: genes x pathways,
+    sparse 0/1). Nodes are kept; only cross-pathway edges are removed."""
+    m = membership.tocsr()
+    shared = np.asarray(m[edge_index[:, 0]].multiply(m[edge_index[:, 1]]).sum(1)).ravel() > 0
+    return edge_index[shared]

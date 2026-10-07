@@ -24,8 +24,9 @@ pd.set_option("display.width", 250)
 df = runner.collect(out)
 df["copy"] = df["copy"].fillna("none")
 df["feats"] = df["feats"].fillna("all") if "feats" in df else "all"
+df["graph"] = df["graph"].fillna("-")  # graph-free models
 df["cond"] = df["copy"].where(~df["copy"].str.startswith("rw"), "rewired")
-keys = ["regime", "feats", "split", "loss", "model"]
+keys = ["regime", "universe", "graph", "feats", "split", "loss", "model"]
 
 # rewired copies are averaged within a seed first, so every seed counts once per condition
 per_seed = df.groupby(keys + ["seed", "cond"])[metric].mean().reset_index()
@@ -47,14 +48,14 @@ effect.to_csv(out / f"graph_effect_{metric}.csv", index=False)
 gp_cols = [c for c in df.columns if c.startswith("gp_share_")] + ["gp_sd_vs_degree", "gp_sd_vs_pubmed"]
 if gp_cols[0] in df:
     gp = (df[(df.model == "gp") & (df.regime == "random")]
-          .groupby(["feats", "split", "loss", "cond"])[[c for c in gp_cols if c in df]].mean().reset_index())
+          .groupby(["universe", "graph", "feats", "split", "loss", "cond"])[[c for c in gp_cols if c in df]].mean().reset_index())
     gp.to_csv(out / "gp_attribution.csv", index=False)
 
 for regime in ["random", "degree"]:
     t = effect[effect.regime == regime].copy()
     t["cell"] = t.apply(lambda r: f"{r['mean']:+.3f}±{r['sd']:.3f} ({r.real_wins}/{r.n})", axis=1)
     print(f"=== does the graph matter? {metric}, regime={regime} (paired by seed) ===")
-    print(t.pivot_table(index=["feats", "split", "loss", "model"], columns="contrast", values="cell", aggfunc="first")
+    print(t.pivot_table(index=["universe", "graph", "feats", "split", "loss", "model"], columns="contrast", values="cell", aggfunc="first")
           .fillna("").to_string())
     print()
 print(f"wrote summary_{metric}.csv, graph_effect_{metric}.csv" + (", gp_attribution.csv" if gp_cols[0] in df else "")

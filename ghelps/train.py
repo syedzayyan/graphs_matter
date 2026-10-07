@@ -10,6 +10,7 @@ import copy as _copy
 import numpy as np
 import torch
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 
 from ghelps import device, gp, losses, models
 from ghelps.data import Problem, gp_inputs
@@ -18,13 +19,13 @@ from ghelps.data import Problem, gp_inputs
 # structural statistics, so the empty graph and shuffled edge vectors are meaningless for
 # them; edge vectors only matter to the edge-aware model.
 NOGRAPH: tuple[str, ...] = ()
-STRUCT = ("real", "rw0", "rw1", "rw2")
+STRUCT = ("real", "rw0", "rw1", "rw2", "pwsub")
 PROP = STRUCT + ("empty",)
 EDGE = PROP + ("shufattr",)
 
 # model -> (kind, input blocks, conditions)
 LADDER = {
-    "deg_lr":          ("linear", ["degree"],          STRUCT),
+    "deg_lr":          ("sklr",   ["degree"],          STRUCT),
     "rf_struct":       ("rf",     ["struct"],          STRUCT),
     "labelprop":       ("lp",     [],                  STRUCT),
     "mlp_feat":        ("mlp",    ["feat"],            NOGRAPH),
@@ -62,20 +63,52 @@ def inputs(p: Problem, blocks: list[str]) -> np.ndarray:
     return np.hstack([parts[b]() for b in blocks]).astype(np.float32)
 
 
+LOSSES = ("nnpu", "pn", "pn_pathway", "pn_pubmed")
+
+
+def _hard_negatives(p: Problem, pos: np.ndarray, unl: np.ndarray, kind: str, rng) -> np.ndarray:
+    """Two-step-PU style negative selection, 1:1 with the positives, without replacement.
+    pathway: unlabelled genes sharing a specific pathway with some positive (hard negatives
+             from the same modules), topped up at random if there are too few.
+    pubmed:  for each positive the unlabelled gene closest in log PubMed count, so negatives
+             are as well studied as positives (removes the study-intensity shortcut)."""
+    n = min(len(pos), len(unl))
+    if kind == "pathway":
+        m = p.pathways
+        shares = np.asarray((m[unl] @ m[pos].T).sum(1)).ravel() > 0
+        hard = rng.permutation(unl[shares])[:n]
+        rest = rng.permutation(np.setdiff1d(unl, hard))[: n - len(hard)]
+        return np.r_[hard, rest]
+    lv = np.log1p(p.pubmed)
+    free = np.ones(len(unl), dtype=bool)
+    picks = []
+    for q in rng.permutation(pos)[:n]:
+        d = np.abs(lv[unl] - lv[q])
+        d[~free] = np.inf
+        j = int(np.argmin(d))
+        free[j] = False
+        picks.append(unl[j])
+    return np.array(picks, dtype=int)
+
+
 def training_set(p: Problem, loss: str, seed: int, fold: str = "train") -> tuple[np.ndarray, np.ndarray]:
     """Indices and 0/1 targets for fitting (or, with fold="val", for early stopping).
     nnpu: every gene in the fold (P vs U). pn: the fold's positives + an equal-sized random
-    draw of its unlabelled genes as negatives (the MORGaN-style 1:1 setup)."""
+    draw of its unlabelled genes as negatives (the MORGaN-style 1:1 setup). pn_pathway /
+    pn_pubmed: the same 1:1 PN but with hard negatives (see _hard_negatives)."""
     tr = np.flatnonzero(p.mask(fold))
     pos, unl = tr[p.y[tr] == 1], tr[p.y[tr] == 0]
+    rng = np.random.default_rng(seed)
     if loss == "pn":
-        unl = np.random.default_rng(seed).choice(unl, size=min(len(pos), len(unl)), replace=False)
+        unl = rng.choice(unl, size=min(len(pos), len(unl)), replace=False)
+    elif loss in ("pn_pathway", "pn_pubmed"):
+        unl = _hard_negatives(p, pos, unl, loss.split("_")[1], rng)
     idx = np.r_[pos, unl]
     return idx, p.y[idx].astype(np.int64)
 
 
 def _objective(logits, t, loss, prior):
-    return losses.nnpu(logits, t.bool(), prior) if loss == "nnpu" else losses.pn(logits, t)
+    return losses.nnpu(logits, t.bool(), prior) if loss == "nnpu" else losses.pn(logits, t)  # pn*: BCE
 
 
 def _fit_torch(net, forward, p: Problem, idx, t, loss, hp, seed) -> torch.Tensor:
@@ -122,6 +155,15 @@ def score(p: Problem, model: str, loss: str, seed: int, **over) -> tuple[np.ndar
     if kind == "lp":
         return models.label_propagation(y_t, ei, train_mask, hp["lp_layers"], hp["lp_alpha"]).cpu().numpy(), {}
 
+    if kind == "sklr":
+        # Degree-only baseline: convex, deterministic logistic regression fit like the RF
+        # (P vs U, balanced). A one-weight torch model under nnPU converged to the inverted
+        # ranking on some seeds; with one feature only the sign matters, so nothing to tune.
+        x = inputs(p, blocks)
+        lr = LogisticRegression(class_weight="balanced", max_iter=1000)
+        lr.fit(x[idx], t)
+        return lr.decision_function(x), {}
+
     if kind == "rf":
         x = inputs(p, blocks)
         rf = RandomForestClassifier(n_estimators=hp["rf_trees"], min_samples_leaf=hp["rf_leaf"],
@@ -142,8 +184,8 @@ def score(p: Problem, model: str, loss: str, seed: int, **over) -> tuple[np.ndar
 
     torch.manual_seed(seed)  # before construction, so initial weights are reproducible
     x = torch.as_tensor(inputs(p, blocks), device=dev)
-    if kind in ("linear", "mlp", "cs"):
-        net = models.mlp(x.size(1), hp["hidden"], 1 if kind == "linear" else hp["layers"], hp["dropout"])
+    if kind in ("mlp", "cs"):
+        net = models.mlp(x.size(1), hp["hidden"], hp["layers"], hp["dropout"])
         forward = lambda: net(x).squeeze(-1)  # noqa: E731
     elif kind == "sign":
         xs = models.sign_features(x, ei)

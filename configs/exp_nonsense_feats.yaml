@@ -1,0 +1,14 @@
+# Nonsense test 2: real Minikel labels, node features replaced by Gaussian noise vectors.
+# Feature models should drop to chance; graph models keep only what the graph itself gives.
+name: nonsense_feats
+grid:
+  universe: [string, string_exp, intact, reactome_fi, huri]
+  graph: [string, string_exp, intact, reactome_fi, huri]
+  copy: [real, rw0, empty]
+  labels: [minikel]
+  feats: [random]
+  split: [random]
+  seed: [0, 1, 2, 3, 4]
+  model: [mlp_feat, rf_feat, mlp_feat_struct, rf_feat_struct, sign_feat, cs_feat, gcn_feat, sage_feat,
+          gat_feat, gat_edge_feat, gp]
+  loss: [nnpu, pn]

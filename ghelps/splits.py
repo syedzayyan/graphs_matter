@@ -141,7 +141,8 @@ def _matched(pos: np.ndarray, cand: np.ndarray, sim, k: int, rng) -> list[tuple[
 
 
 def negatives(split: pd.DataFrame, a_union: sp.csr_matrix, pfam: np.ndarray, pathway: np.ndarray,
-              k: int, seed: int, exclude: np.ndarray | None = None) -> pd.DataFrame:
+              k: int, seed: int, exclude: np.ndarray | None = None,
+              pubmed: np.ndarray | None = None) -> pd.DataFrame:
     """Long table (regime, pos, neg) of node indices for every test-time negative regime.
     `random` lists every unlabelled test gene against all test positives (pos = -1)."""
     rng = np.random.default_rng(seed)
@@ -153,18 +154,25 @@ def negatives(split: pd.DataFrame, a_union: sp.csr_matrix, pfam: np.ndarray, pat
     cand = np.flatnonzero(unl)
 
     deg = np.asarray(a_union.sum(1)).ravel()
-    ldeg = np.log1p(deg)
-    cand_sorted = cand[np.argsort(ldeg[cand])]
     a2 = (a_union @ a_union).tocsr()
     pf = sp.csr_matrix(pfam)
     pw = sp.csr_matrix(pathway)
     pf_share = (pf @ pf.T).tocsr()
     pw_share = (pw @ pw.T).tocsr()
 
-    def nearest_degree(p, width=50):
-        i = np.searchsorted(ldeg[cand_sorted], ldeg[p])
-        return cand_sorted[max(0, i - width): i + width][
-            np.argsort(np.abs(ldeg[cand_sorted[max(0, i - width): i + width]] - ldeg[p]))]
+    def nearest(value: np.ndarray):
+        """Candidates ordered by |log1p(value) difference| to the positive (study-intensity or
+        degree matching)."""
+        lv = np.log1p(value)
+        order = cand[np.argsort(lv[cand])]
+
+        def fn(p, width=50):
+            i = np.searchsorted(lv[order], lv[p])
+            window = order[max(0, i - width): i + width]
+            return window[np.argsort(np.abs(lv[window] - lv[p]))]
+        return fn
+
+    nearest_degree = nearest(deg)
 
     def row(m, p):
         return m.indices[m.indptr[p]:m.indptr[p + 1]]
@@ -179,6 +187,10 @@ def negatives(split: pd.DataFrame, a_union: sp.csr_matrix, pfam: np.ndarray, pat
         "hop1": hop1,
         "hop2": hop2,
     }
+    if pubmed is not None:
+        # study-intensity control: negatives as well studied as the positive
+        nearest_pubmed = nearest(pubmed)
+        regimes["pubmed"] = lambda p: nearest_pubmed(p)[: 4 * k]
     rows = [("random", -1, int(c)) for c in cand] + [("random", int(p), -1) for p in pos]
     for name, sim in regimes.items():
         rows += [(name, p, n) for p, n in _matched(pos, cand, sim, k, rng)]

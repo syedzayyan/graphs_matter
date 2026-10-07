@@ -1,14 +1,13 @@
 # Optuna tuning (tune.py). One study per (model, loss, graph condition: real / rewired /
 # empty / none). Train/val folds of the tuning seeds only; test folds are never seen.
 out: results/tuning
-universe: main
-graph: string
+universes: [string, string_exp, intact, reactome_fi, huri]   # one graph each (configs/data.yaml)
 labels: minikel
 split: random
 seeds: [5, 6]              # dedicated tuning split seeds, never used for evaluation (0-4)
 trials: 60                 # per (model, loss, graph condition) study
 timeout_per_study: 14400   # seconds
 sampler_seed: 0
-models: [deg_lr, rf_struct, labelprop, mlp_feat, rf_feat, mlp_feat_struct, rf_feat_struct,
+models: [rf_struct, labelprop, mlp_feat, rf_feat, mlp_feat_struct, rf_feat_struct,
          sign_feat, cs_feat, gcn_none, gcn_feat, sage_feat, gat_none, gat_feat, gat_edge_feat, gp]
 losses: [nnpu, pn]

@@ -14,7 +14,9 @@ graphs:
                  "ubiquitination reaction", "protein cleavage", "cleavage reaction",
                  "methylation reaction", "adp ribosylation reaction", "enzymatic reaction"]
   reactome_fi:
-    include_predicted: true
+    # Curated functional interactions only: drop pairs annotated purely "predicted" (the
+    # Reactome FI naive-Bayes predictions); pairs with curated support are kept.
+    include_predicted: false
   huri: {}
 
 rewire:
@@ -25,20 +27,20 @@ rewire:
 labels:
   minikel_min_phase: "Phase III"       # >= Phase III counts as positive
 
-# Gene universes. "main": intersection of the four non-HuRI graphs. "huri": adds HuRI
-# (= 5-way intersection), used for the study-bias test with all five graphs on equal genes.
+# Gene universes: one per graph, its own (protein-coding) node set. Each graph is a separate
+# test with its own genes, positives, splits and tuned hyperparameters; graphs are not
+# restricted to a shared gene set.
 universes:
-  main: [string, string_exp, intact, reactome_fi]
-  huri: [string, string_exp, intact, reactome_fi, huri]
+  string: [string]
+  string_exp: [string_exp]
+  intact: [intact]
+  reactome_fi: [reactome_fi]
+  huri: [huri]
 
-# Edge-matched copies for the HuRI study-bias test: within the huri universe, each graph is
-# randomly subsampled to HuRI's edge count, so "less signal on HuRI" can't just be "fewer
-# edges". Built as <graph>_em (+ rewired copies) alongside the full graphs.
-edge_matched:
-  universe: huri
-  reference: huri
-  graphs: [string, string_exp, intact, reactome_fi]
-  seed: 0
+# Pathway-coherent subgraph (graph condition "pwsub"): keep only edges whose endpoints share
+# a specific Reactome pathway. Removes cross-module edges without breaking modules apart.
+pathway_subgraph:
+  max_pathway_genes: 100
 
 splits:
   n_seeds: 7                      # 0-4 evaluation (experiment configs), 5-6 tuning only (tune.yaml)
@@ -47,3 +49,5 @@ splits:
   recent_from_year: 2021          # rcnt stand-in: first Minikel launch >= this year
   neg_per_pos: 5                  # matched negatives per test positive
   pathway_match_max_genes: 100    # same-pathway negatives use specific pathways only
+  label_sets: [minikel, minikel_perm, membrane]
+  permutation_seed: 0             # minikel_perm: Minikel labels randomly permuted (nonsense test)

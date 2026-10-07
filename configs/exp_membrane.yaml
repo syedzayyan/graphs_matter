@@ -1,0 +1,16 @@
+# Positive control: membrane vs not (GO:0016020 / GO:0005886), features without GO or
+# tractability (both encode localisation). The question: on a label that is learnable and
+# graph-coherent, does the graph help inside graph models (real > empty)? If it does here but
+# not for druggability, the druggability task specifically does not benefit from the graph.
+name: membrane
+grid:
+  universe: [string, string_exp, intact, reactome_fi, huri]
+  graph: [string, string_exp, intact, reactome_fi, huri]
+  copy: [real, rw0, rw1, rw2, empty, pwsub]
+  labels: [membrane]
+  feats: [no_loc]
+  split: [random, pfam]
+  seed: [0, 1, 2, 3, 4]
+  model: [deg_lr, rf_struct, labelprop, mlp_feat, rf_feat, mlp_feat_struct, rf_feat_struct,
+          sign_feat, cs_feat, gcn_none, gcn_feat, sage_feat, gat_none, gat_feat, gat_edge_feat, gp]
+  loss: [nnpu, pn]

@@ -5,6 +5,7 @@ Graph conditions ("copy"):
   rw0..rw2   degree-preserving rewired copies (edge vectors permuted onto them)
   empty      no edges: same model with the graph removed
   shufattr   real topology, edge vectors permuted across edges
+  pwsub      pathway-coherent subgraph: real edges whose endpoints share a specific pathway
 """
 from __future__ import annotations
 
@@ -29,7 +30,10 @@ FEATURE_BLOCKS = ("go", "pfam", "pathway", "tract")
 # Feature sets (experiment axis `feats`). no_tract drops Open Targets tractability entirely:
 # even its non-clinical buckets (druggable family, ligands, pockets) partly reflect past
 # drug programmes, so every result should also hold without it.
-FEATURE_SETS = {"all": FEATURE_BLOCKS, "no_tract": ("go", "pfam", "pathway")}
+# no_loc drops GO and tractability (both encode subcellular localisation): the feature set
+# for the membrane positive control. random is the nonsense test: Gaussian noise vectors.
+FEATURE_SETS = {"all": FEATURE_BLOCKS, "no_tract": ("go", "pfam", "pathway"),
+                "no_loc": ("pfam", "pathway"), "random": ("noise",)}
 SVD_DIM = 256
 GP_BLOCK_DIM = 32
 GP_TOPO_DIM = 16
@@ -56,6 +60,12 @@ class Problem:
     raw_degree: np.ndarray | None
     feat: np.ndarray
     negatives: pd.DataFrame
+    pubmed: np.ndarray             # PubMed count per gene (study intensity)
+
+    @property
+    def pathways(self) -> sp.csr_matrix:
+        """Gene x specific-pathway (<= 100 genes) membership, for same-pathway hard negatives."""
+        return pathway_membership(self.universe)
 
     def mask(self, f: str) -> np.ndarray:
         return self.fold == f
@@ -71,11 +81,16 @@ def genes_of(universe: str) -> list[str]:
 
 
 def _svd(universe: str, blocks, dim: int, tag: str) -> np.ndarray:
-    """Label-free TruncatedSVD of the concatenated binary blocks, z-scored, cached."""
+    """Label-free TruncatedSVD of the concatenated binary blocks, z-scored, cached. The
+    pseudo-block "noise" gives seeded Gaussian vectors of the same width instead."""
     cache = P / "features" / universe / f"svd{dim}_{tag}.npy"
     if cache.exists():
         return np.load(cache)
     genes = genes_of(universe)
+    if tuple(blocks) == ("noise",):
+        z = np.random.default_rng(0).standard_normal((len(genes), dim)).astype(np.float32)
+        np.save(cache, z)
+        return z
     x = sp.hstack([sp.csr_matrix(pd.read_parquet(P / "features" / universe / f"{b}.parquet").loc[genes].values,
                                  dtype=np.float32) for b in blocks]).tocsr()
     z = _z(TruncatedSVD(min(dim, x.shape[1] - 1), random_state=0).fit_transform(x)).astype(np.float32)
@@ -83,7 +98,18 @@ def _svd(universe: str, blocks, dim: int, tag: str) -> np.ndarray:
     return z
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=8)
+def pathway_membership(universe: str, max_genes: int = 100) -> sp.csr_matrix:
+    pw = pd.read_parquet(P / "features" / universe / "pathway.parquet").loc[genes_of(universe)]
+    return sp.csr_matrix(pw.loc[:, pw.sum() <= max_genes].values, dtype=np.float32)
+
+
+@lru_cache(maxsize=8)
+def pubmed_counts(universe: str) -> np.ndarray:
+    return pd.read_parquet(P / "features" / universe / "pubmed.parquet").loc[genes_of(universe)].pubmed_count.values
+
+
+@lru_cache(maxsize=8)
 def features(universe: str, feats: str = "all") -> np.ndarray:
     return _svd(universe, FEATURE_SETS[feats], SVD_DIM, feats)
 
@@ -122,7 +148,7 @@ def load(universe: str, graph: str | None, copy: str, labels: str, split: str, s
                                num_nodes=len(genes))
         st, deg = _struct(universe, graph, copy)
     return Problem(universe, graph, copy, feats, genes, s.y.values, s.fold.values, ei, ea, st, deg,
-                   features(universe, feats), neg)
+                   features(universe, feats), neg, pubmed_counts(universe))
 
 
 def gp_inputs(p: Problem) -> tuple[np.ndarray, dict[str, list[int]]]:

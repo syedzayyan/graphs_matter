@@ -1,0 +1,17 @@
+# Main test: does the graph matter inside graph models for drug-target (Minikel >= Phase III)
+# prediction? Each of the five graphs is its own test on its own gene universe. Graph
+# conditions: real, 3 degree-preserving rewired copies, empty (same model, no edges),
+# shuffled edge vectors (edge model), pathway-coherent subgraph. Training: nnPU, PN with
+# random 1:1 negatives, and PN with hard negatives (same-pathway / PubMed-matched).
+name: main
+grid:
+  universe: [string, string_exp, intact, reactome_fi, huri]
+  graph: [string, string_exp, intact, reactome_fi, huri]      # only the universe's own graph runs
+  copy: [real, rw0, rw1, rw2, empty, shufattr, pwsub]
+  labels: [minikel]
+  feats: [all, no_tract]
+  split: [random, pfam]
+  seed: [0, 1, 2, 3, 4]
+  model: &models [deg_lr, rf_struct, labelprop, mlp_feat, rf_feat, mlp_feat_struct, rf_feat_struct,
+                  sign_feat, cs_feat, gcn_none, gcn_feat, sage_feat, gat_none, gat_feat, gat_edge_feat, gp]
+  loss: [nnpu, pn, pn_pathway, pn_pubmed]

@@ -27,6 +27,15 @@ def minikel_first_launch() -> pd.Series:
     return p.groupby("ensg").year_launch.min()
 
 
+def membrane() -> set[str]:
+    """Positive-control label: GO membrane (GO:0016020) or plasma membrane (GO:0005886), any
+    evidence code, excluding NOT-qualified annotations."""
+    gaf = pd.read_csv(ids.RAW / "goa_human.gaf.gz", sep="\t", comment="!", header=None, usecols=[1, 2, 3, 4],
+                      names=["acc", "sym", "qual", "go"], dtype=str)
+    gaf = gaf[gaf.go.isin({"GO:0016020", "GO:0005886"}) & ~gaf.qual.str.startswith("NOT")]
+    return set(ids.map_uniprot(gaf.acc).dropna()) | set(ids.map_symbols(gaf.sym).dropna())
+
+
 def pharos_tdl() -> pd.Series:
     d = pd.read_csv(ids.RAW / "pharos_targets.tsv", sep="\t")
     d["ensg"] = ids.map_uniprot(d.uniprot).fillna(ids.map_symbols(d.sym))

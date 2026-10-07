@@ -22,7 +22,9 @@ P = paths.PROCESSED
 cfg = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))
 sc = cfg["splits"]
 
-pos_sets = {"minikel": labels.minikel(cfg["labels"]["minikel_min_phase"])}
+minikel = labels.minikel(cfg["labels"]["minikel_min_phase"])
+membrane = labels.membrane()
+MINIKEL_ONLY_SPLITS = {"rcnt", "pharos"}  # defined from drug-development data
 first_launch = labels.minikel_first_launch()
 tdl = labels.pharos_tdl()
 
@@ -36,6 +38,15 @@ for uname, members in cfg["universes"].items():
     pfam = pd.read_parquet(P / "features" / uname / "pfam.parquet").loc[genes]
     pw = pd.read_parquet(P / "features" / uname / "pathway.parquet").loc[genes]
     pw = pw.loc[:, pw.sum() <= sc["pathway_match_max_genes"]]  # specific pathways only
+    pubmed = pd.read_parquet(P / "features" / uname / "pubmed.parquet").loc[genes].pubmed_count.values
+    y_mk = np.array([g in minikel for g in genes], dtype=np.int8)
+    label_sets = {
+        "minikel": y_mk,
+        # nonsense test: the same number of positives on randomly chosen genes
+        "minikel_perm": np.random.default_rng(sc["permutation_seed"]).permutation(y_mk),
+        # positive control: a label known to be learnable (and graph-coherent)
+        "membrane": np.array([g in membrane for g in genes], dtype=np.int8),
+    }
 
     comm = splits.leiden(a_union, sc["leiden_resolution"], sc["leiden_seed"])
     csz = np.bincount(comm)
@@ -44,10 +55,10 @@ for uname, members in cfg["universes"].items():
     recent = np.array([first_launch.get(g, 0) >= sc["recent_from_year"] for g in genes])
     t = np.array([tdl.get(g, "") for g in genes])
 
-    for lname, pos in pos_sets.items():
+    for lname in sc["label_sets"]:
+        y = label_sets[lname]
         out = P / "splits" / uname / lname
         out.mkdir(parents=True, exist_ok=True)
-        y = np.array([g in pos for g in genes], dtype=np.int8)
         pd.DataFrame({"gene": genes, "y": y}).to_parquet(out / "labels.parquet")
         pd.DataFrame({"gene": genes, "community": comm}).to_parquet(out / "communities.parquet")
         chem = (t == "Tchem") & (y == 0)
@@ -63,11 +74,14 @@ for uname, members in cfg["universes"].items():
                 # so they are neither training unlabelled nor test negatives.
                 "pharos": (splits.held_out_positive_split(genes, y, chem, seed, exclude_unl=clin), clin),
             }
+            if lname != "minikel":
+                made = {k: v for k, v in made.items() if k not in MINIKEL_ONLY_SPLITS}
             for sname, (df, excl) in made.items():
                 d = out / sname
                 d.mkdir(exist_ok=True)
                 df.to_parquet(d / f"seed{seed}.parquet")
-                neg = splits.negatives(df, a_union, pfam.values, pw.values, sc["neg_per_pos"], seed, excl)
+                neg = splits.negatives(df, a_union, pfam.values, pw.values, sc["neg_per_pos"], seed, excl,
+                                       pubmed=pubmed)
                 neg.to_parquet(d / f"seed{seed}.neg.parquet")
                 fc = df.groupby(["fold", "y"]).size()
                 row = {"universe": uname, "labels": lname, "split": sname, "seed": seed,

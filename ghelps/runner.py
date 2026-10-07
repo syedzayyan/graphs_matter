@@ -28,39 +28,58 @@ def tuning_condition(copy: str | None) -> str:
         return "none"
     if copy.startswith("rw"):
         return "rewired"
-    return "empty" if copy == "empty" else "real"  # shufattr reuses the real graph's params
+    if copy == "empty":
+        return "empty"
+    return "real"  # shufattr and pwsub are variants of the real graph
 
 
-def tuned_params(best: dict, model: str, loss: str, copy: str | None) -> dict:
-    """best_params.yaml lookup: {model: {loss: {condition: params}}}. A missing entry means
-    DEFAULTS; params from another condition are never borrowed. Params are tuned on the full
-    feature set and reused for feature ablations (feats=no_tract)."""
-    per_cond = best.get(model, {}).get(loss, {})
-    if per_cond and not set(per_cond) & {"real", "rewired", "empty", "none"}:
-        raise ValueError("best_params.yaml is in the old per-(model, loss) format; re-run tune.py "
-                         "(v2 studies tune per graph condition) or pass --no-tuned")
+def tuning_loss(loss: str) -> str:
+    """Hard-negative regimes are PN with different negatives: they reuse PN's params."""
+    return "pn" if loss.startswith("pn") else loss
+
+
+def tuned_params(best: dict, universe: str, model: str, loss: str, copy: str | None) -> dict:
+    """best_params.yaml lookup: {universe: {model: {loss: {condition: params}}}}. A missing
+    entry means DEFAULTS; params from another condition are never borrowed. Params are tuned
+    on Minikel labels with the full feature set and reused for the other label sets / feature
+    sets of the same universe."""
+    from ghelps.train import LADDER
+    if LADDER[model][0] == "sklr":
+        return {}  # untuned by design
+    if best and not set(best) & set(_universes()):
+        raise ValueError("best_params.yaml predates per-graph tuning (no universe level); "
+                         "re-run tune.py or pass --no-tuned")
+    per_cond = best.get(universe, {}).get(model, {}).get(tuning_loss(loss), {})
     params = per_cond.get(tuning_condition(copy), {})
     return {k: v for k, v in params.items() if not k.startswith("_")}
 
 
+def _universes() -> dict:
+    import yaml
+    return yaml.safe_load(open(ROOT / "configs" / "data.yaml"))["universes"]
+
+
 def expand(exp: dict, best: dict | None = None) -> list[dict]:
-    """Grid -> run configs. Hyperparameters: the tuned params for (model, loss, graph
-    condition) if given, then the experiment's own `hparams` on top."""
-    from ghelps.train import LADDER
-    from ghelps.train import uses_features
+    """Grid -> run configs. Hyperparameters: the tuned params for (universe, model, loss,
+    graph condition) if given, then the experiment's own `hparams` on top. Combinations whose
+    graph is not built on the universe are skipped."""
+    from ghelps.train import LADDER, uses_features
     grid = {**AXIS_DEFAULTS, **exp["grid"]}
     best = best or {}
+    universes = _universes()
     runs, seen = [], set()
     for combo in itertools.product(*(grid[a] for a in AXES)):
         r = dict(zip(AXES, combo))
         if r["feats"] != "all" and not uses_features(r["model"]):
-            continue                           # feature ablation is moot for feature-free models
+            continue                           # feature sets are moot for feature-free models
         conditions = LADDER[r["model"]][2]
         if not conditions:                     # graph-free: one run per (labels, split, seed, loss)
             r["graph"], r["copy"] = None, None
         elif r["copy"] not in conditions:      # e.g. shuffled edge vectors for a non-edge model
             continue
-        r.update(tuned_params(best, r["model"], r["loss"], r["copy"]), **exp.get("hparams", {}))
+        elif r["graph"] not in universes[r["universe"]]:
+            continue
+        r.update(tuned_params(best, r["universe"], r["model"], r["loss"], r["copy"]), **exp.get("hparams", {}))
         key = run_id(r)
         if key not in seen:
             seen.add(key)

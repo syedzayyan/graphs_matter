@@ -32,7 +32,8 @@ def _done(step: str) -> bool:
         from ghelps.graphs import universe_graphs
         cfg = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))
         return (P / "graphs" / "summary.tsv").exists() and all(
-            (P / "graphs" / n / f"{g}.real.npy").exists() for n in u for g in universe_graphs(cfg, n))
+            (P / "graphs" / n / f"{g}.{c}.npy").exists() for n in u for g in universe_graphs(cfg, n)
+            for c in ("real", "pwsub"))
     if step == "structure":
         want = [g.name.replace(".npy", ".parquet") for n in u for g in (P / "graphs" / n).glob("*.npy")
                 if ".empty." not in g.name]
@@ -41,14 +42,16 @@ def _done(step: str) -> bool:
     if step == "edge_attr":
         from ghelps.graphs import universe_graphs
         cfg = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))
-        return all((P / "edge_attr" / n / f"{g}.shufattr.npy").exists() and
+        return all((P / "edge_attr" / n / f"{g}.pwsub.npy").exists() and
+                   (P / "edge_attr" / n / f"{g}.shufattr.npy").exists() and
                    (P / "graphs" / n / f"{g}.empty.npy").exists() for n in u for g in universe_graphs(cfg, n))
     if step == "features":
         return all((P / "features" / n / "pubmed.parquet").exists() for n in u)
     if step == "splits":
-        n = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))["splits"]["n_seeds"]
-        last = P / "splits" / next(iter(u)) / "minikel" / "random" / f"seed{n - 1}.neg.parquet"
-        return (P / "splits" / "summary.tsv").exists() and last.exists()
+        sc = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))["splits"]
+        return (P / "splits" / "summary.tsv").exists() and all(
+            (P / "splits" / n / ls / "random" / f"seed{sc['n_seeds'] - 1}.neg.parquet").exists()
+            for n in u for ls in sc["label_sets"])
     raise ValueError(step)
 
 

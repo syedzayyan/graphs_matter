@@ -31,7 +31,7 @@ for udir in sorted(p for p in G.iterdir() if p.is_dir()):
         a = m.reindex(genes, fill_value=0)
         a = a.loc[:, a.sum() >= 2]  # drop columns that are constant on this universe
         a.to_parquet(out / f"{name}.parquet")
-        print(f"{udir.name}/{name}: {a.shape[1]} cols, coverage {(a.sum(1) > 0).mean():.1%}")
+        print(f"{udir.name}/{name}: {a.shape[1]} cols, coverage {(a.sum(axis=1) > 0).mean():.1%}")
     pm = pubmed.reindex(genes, fill_value=0).to_frame()
     pm.to_parquet(out / "pubmed.parquet")
     print(f"{udir.name}/pubmed: median {pm.pubmed_count.median():.0f}, zero {(pm.pubmed_count == 0).mean():.1%}")

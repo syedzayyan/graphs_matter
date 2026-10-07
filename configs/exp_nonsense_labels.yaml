@@ -1,0 +1,14 @@
+# Nonsense test 1: Minikel labels randomly permuted across genes (same number of positives).
+# Every model should sit at AUROC ~0.5; anything above flags leakage or a degenerate signal.
+name: nonsense_labels
+grid:
+  universe: [string, string_exp, intact, reactome_fi, huri]
+  graph: [string, string_exp, intact, reactome_fi, huri]
+  copy: [real, rw0, empty]
+  labels: [minikel_perm]
+  feats: [all]
+  split: [random]
+  seed: [0, 1, 2, 3, 4]
+  model: [deg_lr, rf_struct, labelprop, mlp_feat, rf_feat, mlp_feat_struct, rf_feat_struct,
+          sign_feat, cs_feat, gcn_none, gcn_feat, sage_feat, gat_none, gat_feat, gat_edge_feat, gp]
+  loss: [nnpu, pn]
