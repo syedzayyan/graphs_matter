@@ -9,6 +9,10 @@ hub_bias.csv      do Minikel positives sit on hubs? degree of positives vs unlab
                   degree survives controlling for study intensity (PubMed count): degree AUROC
                   within PubMed quintiles, and PubMed-only vs PubMed+degree logistic regression
 membrane.csv      fraction of membrane proteins among positives vs unlabelled, per graph
+mediation.csv     is the feature -> label association mediated by study intensity? For each
+                  feature block: out-of-fold logistic score s, its AUROC overall and within
+                  PubMed quintiles, corr(s, log PubMed), and the shrinkage of s's logistic
+                  coefficient when log PubMed is added (1 - b_adjusted / b_alone)
 
 Uses $GHELPS_DATA, so on the cluster it describes exactly the data the runs used.
 """
@@ -43,10 +47,38 @@ def oof_lr(x, y):
     return s
 
 
+FEATURE_BLOCKS = ["go", "pfam", "pathway", "tract"]
+
+
+def mediation(universe: str, y: np.ndarray, lpm: np.ndarray, quint: np.ndarray, deg: np.ndarray) -> list[dict]:
+    import statsmodels.api as sm
+    blocks = {b: data._svd(universe, (b,), 32, b) for b in FEATURE_BLOCKS}
+    blocks["all features"] = data.features(universe, "all")
+    for extra in ("attn_free",):  # attention-free features, when built
+        if extra in data.FEATURE_SETS and all((paths.PROCESSED / "features" / universe / f"{b}.parquet").exists()
+                                              for b in data.FEATURE_SETS[extra]):
+            blocks["attention-free features"] = data.features(universe, extra)
+    blocks["degree"] = np.log1p(deg)[:, None]
+    z = lambda v: (v - v.mean()) / (v.std() + 1e-12)  # noqa: E731
+    rows = []
+    for name, x in blocks.items():
+        s = oof_lr(x, y)
+        logit_s = np.log(np.clip(s, 1e-6, 1 - 1e-6) / np.clip(1 - s, 1e-6, 1))
+        alone = sm.Logit(y, sm.add_constant(z(logit_s))).fit(disp=0)
+        adj = sm.Logit(y, sm.add_constant(np.c_[z(logit_s), z(lpm)])).fit(disp=0)
+        within = [auc(y[quint == k], s[quint == k]) for k in range(5)]
+        rows.append(dict(block=name, auroc=auc(y, s), auroc_within_pubmed_quintiles=np.nanmean(within),
+                         rho_score_log_pubmed=spearmanr(s, lpm).statistic,
+                         coef_alone=alone.params[1], coef_adjusted=adj.params[1], coef_pubmed=adj.params[2],
+                         shrinkage=1 - adj.params[1] / alone.params[1],
+                         auroc_with_pubmed=auc(y, oof_lr(np.c_[x, lpm], y))))
+    return rows
+
+
 def main():
     pos_all = labels.minikel(CFG["labels"]["minikel_min_phase"])
     membrane = labels.membrane()
-    sizes, hubs, mem = [], [], []
+    sizes, hubs, mem, med = [], [], [], []
     for universe, members in CFG["universes"].items():
         genes = data.genes_of(universe)
         y = np.array([g in pos_all for g in genes], dtype=int)
@@ -75,11 +107,13 @@ def main():
                 deg_auroc_by_pubmed_quintile=" ".join(f"{w:.2f}" for w in within),
                 lr_pubmed_auroc=auc(y, oof_lr(lpm[:, None], y)),
                 lr_pubmed_plus_degree_auroc=auc(y, oof_lr(np.c_[lpm, np.log1p(d)], y))))
+            med += [dict(graph=graph, pubmed_alone_auroc=auc(y, oof_lr(lpm[:, None], y)), **m)
+                    for m in mediation(universe, y, lpm, quint, d)]
             mem.append(dict(graph=graph, membrane_frac_positives=is_mem[y == 1].mean(),
                             membrane_frac_unlabelled=is_mem[y == 0].mean(),
                             membrane_flag_auroc=auc(y, is_mem.astype(float)),
                             membrane_prevalence=is_mem.mean()))
-    for name, rows in (("graph_sizes", sizes), ("hub_bias", hubs), ("membrane", mem)):
+    for name, rows in (("graph_sizes", sizes), ("hub_bias", hubs), ("membrane", mem), ("mediation", med)):
         t = pd.DataFrame(rows)
         t.to_csv(OUT / f"{name}.csv", index=False)
         print(f"== {name}\n{t.round(3).to_string(index=False)}\n", flush=True)

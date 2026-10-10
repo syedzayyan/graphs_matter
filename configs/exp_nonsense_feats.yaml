@@ -2,8 +2,8 @@
 # Feature models should drop to chance; graph models keep only what the graph itself gives.
 name: nonsense_feats
 grid:
-  universe: [string, string_exp, intact, reactome_fi, huri]
-  graph: [string, string_exp, intact, reactome_fi, huri]
+  universe: [string, reactome_fi, huri]
+  graph: [string, reactome_fi, huri]
   copy: [real, rw0, empty]
   labels: [minikel]
   feats: [random]

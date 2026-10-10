@@ -1,0 +1,16 @@
+# Therapeutic-wave transfer: train on positives never targeted in a wave (oncology, CNS,
+# cardiometabolic, inflammation), test on genes targeted only in that wave. If models
+# transfer within but not across waves, the labels encode area-specific history rather than
+# general druggability. Waves with < 30 single-wave genes on a graph are not built (skipped).
+name: waves
+grid:
+  universe: [string, reactome_fi, huri]
+  graph: [string, reactome_fi, huri]
+  copy: [real, rw0, empty]
+  labels: [minikel]
+  feats: [all, attn_free]
+  split: [wave_oncology, wave_cns, wave_cardiometabolic, wave_inflammation]
+  seed: [0, 1, 2, 3, 4]
+  model: [deg_lr, rf_struct, labelprop, mlp_feat, rf_feat, mlp_feat_struct, rf_feat_struct,
+          sign_feat, cs_feat, gcn_none, gcn_feat, sage_feat, gat_none, gat_feat, gat_edge_feat, gp]
+  loss: [nnpu, pn]

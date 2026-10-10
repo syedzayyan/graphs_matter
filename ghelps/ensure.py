@@ -46,7 +46,8 @@ def _done(step: str) -> bool:
                    (P / "edge_attr" / n / f"{g}.shufattr.npy").exists() and
                    (P / "graphs" / n / f"{g}.empty.npy").exists() for n in u for g in universe_graphs(cfg, n))
     if step == "features":
-        return all((P / "features" / n / "pubmed.parquet").exists() for n in u)
+        return all((P / "features" / n / f"{b}.parquet").exists() for n in u
+                   for b in ("pubmed", "esm", "seqfeat", "gtex"))
     if step == "splits":
         sc = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))["splits"]
         return (P / "splits" / "summary.tsv").exists() and all(

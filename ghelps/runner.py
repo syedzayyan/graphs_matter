@@ -18,6 +18,8 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
+from ghelps.paths import PROCESSED as _PROCESSED  # noqa: E402
+P_SPLITS = _PROCESSED / "splits"
 AXES = ["universe", "graph", "copy", "labels", "feats", "split", "seed", "model", "loss"]
 AXIS_DEFAULTS = {"feats": ["all"]}  # axes an experiment config may omit
 
@@ -79,6 +81,8 @@ def expand(exp: dict, best: dict | None = None) -> list[dict]:
             continue
         elif r["graph"] not in universes[r["universe"]]:
             continue
+        if not (P_SPLITS / r["universe"] / r["labels"] / r["split"]).exists():
+            continue                           # split not built for this universe (e.g. too few wave genes)
         r.update(tuned_params(best, r["universe"], r["model"], r["loss"], r["copy"]), **exp.get("hparams", {}))
         key = run_id(r)
         if key not in seen:

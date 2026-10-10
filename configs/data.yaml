@@ -28,12 +28,12 @@ labels:
   minikel_min_phase: "Phase III"       # >= Phase III counts as positive
 
 # Gene universes: one per graph, its own (protein-coding) node set. Each graph is a separate
-# test with its own genes, positives, splits and tuned hyperparameters; graphs are not
-# restricted to a shared gene set.
+# test with its own genes, positives, splits and tuned hyperparameters. Three graphs span the
+# spectrum: STRING >= 700 (literature + curated + experimental), Reactome FI (curated only),
+# HuRI (systematic Y2H, literature-free). string_exp and intact are still built as raw edge
+# lists because their membership bits are part of the edge vectors.
 universes:
   string: [string]
-  string_exp: [string_exp]
-  intact: [intact]
   reactome_fi: [reactome_fi]
   huri: [huri]
 
@@ -42,6 +42,12 @@ universes:
 pathway_subgraph:
   max_pathway_genes: 100
 
+# Attention-free node features (feats: attn_free): ESM-2 embeddings of the canonical UniProt
+# sequence, sequence-derived features (length, composition, Kyte-Doolittle TM helices) and
+# GTEx median expression. Measured / computed uniformly, independent of study intensity.
+attention_free:
+  esm_model: facebook/esm2_t12_35M_UR50D   # 35M runs on CPU; esm2_t33_650M_UR50D on a GPU
+
 splits:
   n_seeds: 7                      # 0-4 evaluation (experiment configs), 5-6 tuning only (tune.yaml)
   leiden_resolution: 5.0     # ~70-85 communities, none > 5% of genes
@@ -49,5 +55,19 @@ splits:
   recent_from_year: 2021          # rcnt stand-in: first Minikel launch >= this year
   neg_per_pos: 5                  # matched negatives per test positive
   pathway_match_max_genes: 100    # same-pathway negatives use specific pathways only
-  label_sets: [minikel, minikel_perm, membrane]
+  label_sets: [minikel, minikel_perm, minikel_famperm, membrane]
   permutation_seed: 0             # minikel_perm: Minikel labels randomly permuted (nonsense test)
+                                  # minikel_famperm: permuted only within Pfam families (genes
+                                  # without Pfam form one group): if a model still scores, it
+                                  # learned family membership, not the gene
+  # Therapeutic-wave transfer splits (Minikel only): test positives are genes whose >= Phase III
+  # indications all fall in one wave; training positives never touched that wave; genes in the
+  # wave and elsewhere are excluded. Generic MeSH areas are ignored.
+  waves:
+    oncology: [oncology, hematology]
+    cns: [neurology, psychiatry, ophthalmology]
+    cardiometabolic: [cardiovascular, metabolic, endocrine, digestive]
+    inflammation: [immune, dermatology, respiratory, musculoskeletal]
+    infection: [infection]
+  wave_generic_areas: [signs/symptoms, other, congenital]
+  wave_min_test_genes: 30         # waves with fewer single-wave genes in a universe are skipped

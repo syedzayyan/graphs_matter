@@ -27,6 +27,21 @@ def minikel_first_launch() -> pd.Series:
     return p.groupby("ensg").year_launch.min()
 
 
+def minikel_wave_genes(waves: dict[str, list[str]], generic: list[str], min_phase: str = "Phase III"):
+    """Per therapeutic wave: (pure, touching) gene sets. pure = every >= min_phase indication
+    of the gene (ignoring generic areas) lies in the wave; touching = at least one does."""
+    pp = _minikel_pp()
+    ind = pd.read_csv(ids.RAW / "minikel" / "indic.tsv", sep="\t", usecols=["indication_mesh_id", "areas"])
+    pos = pp[pp.ccatnum >= PHASE_NUM[min_phase]].merge(ind, on="indication_mesh_id", how="left")
+    pos = pos.assign(area=pos.areas.fillna("other").str.split(r"[;,|]")).explode("area")
+    pos["area"] = pos.area.str.strip()
+    area2wave = {a: w for w, areas in waves.items() for a in areas}
+    pos = pos[~pos.area.isin(generic)]
+    gene_waves = pos.groupby("ensg").area.apply(lambda s: {area2wave.get(a, "unassigned") for a in s})
+    return {w: ({g for g, ws in gene_waves.items() if ws == {w}}, {g for g, ws in gene_waves.items() if w in ws})
+            for w in waves}
+
+
 def membrane() -> set[str]:
     """Positive-control label: GO membrane (GO:0016020) or plasma membrane (GO:0005886), any
     evidence code, excluding NOT-qualified annotations."""

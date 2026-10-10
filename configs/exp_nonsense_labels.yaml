@@ -1,11 +1,13 @@
-# Nonsense test 1: Minikel labels randomly permuted across genes (same number of positives).
-# Every model should sit at AUROC ~0.5; anything above flags leakage or a degenerate signal.
+# Nonsense / family controls.
+#   minikel_perm: Minikel labels permuted across all genes -> every model should score ~0.5.
+#   minikel_famperm: labels permuted only within Pfam families -> whatever survives was learned
+#   from family membership (self-similarity to past targets), not from the gene itself.
 name: nonsense_labels
 grid:
-  universe: [string, string_exp, intact, reactome_fi, huri]
-  graph: [string, string_exp, intact, reactome_fi, huri]
+  universe: [string, reactome_fi, huri]
+  graph: [string, reactome_fi, huri]
   copy: [real, rw0, empty]
-  labels: [minikel_perm]
+  labels: [minikel_perm, minikel_famperm]
   feats: [all]
   split: [random]
   seed: [0, 1, 2, 3, 4]

@@ -23,6 +23,7 @@ dependencies = [
     "gpytorch>=1.15.2",
     "optuna>=5.0.0",
     "mlstatkit",
+    "transformers>=5.19.0",
 ]
 
 [build-system]

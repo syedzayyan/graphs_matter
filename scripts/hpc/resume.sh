@@ -4,8 +4,8 @@
 #   bash scripts/hpc/resume.sh [experiment ...]   (default: all four)
 set -euo pipefail
 mkdir -p results/logs
-EXPS=("$@"); [ ${#EXPS[@]} -eq 0 ] && EXPS=(main membrane nonsense_labels nonsense_feats)
-declare -A SHARDS=([main]=32 [membrane]=8 [nonsense_labels]=4 [nonsense_feats]=4)
+EXPS=("$@"); [ ${#EXPS[@]} -eq 0 ] && EXPS=(main waves membrane nonsense_labels nonsense_feats)
+declare -A SHARDS=([main]=32 [waves]=8 [membrane]=8 [nonsense_labels]=4 [nonsense_feats]=4)
 deps=""
 for e in "${EXPS[@]}"; do
   id=$(sbatch --parsable --array=0-$((${SHARDS[$e]:-8} - 1)) scripts/hpc/run.sbatch configs/exp_${e}.yaml)

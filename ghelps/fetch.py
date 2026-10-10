@@ -95,6 +95,11 @@ SOURCES: dict[str, callable] = {
     "uniprot_human.tsv.gz": url("https://rest.uniprot.org/uniprotkb/stream?query=organism_id:9606+AND+reviewed:true"
                                 "&fields=accession,gene_primary,xref_pfam,xref_ensembl&format=tsv&compressed=true"),
     "ot/target_tractability": _ot_dataset("target_tractability"),
+    # attention-free feature sources: measured / computed uniformly for every gene
+    "uniprot_human.fasta.gz": url("https://rest.uniprot.org/uniprotkb/stream?query=organism_id:9606+AND+reviewed:true"
+                                  "&format=fasta&compressed=true"),
+    "gtex_median_tpm.gct.gz": url("https://storage.googleapis.com/adult-gtex/bulk-gex/v10/rna-seq/"
+                                  "GTEx_Analysis_v10_RNASeQCv2.4.2_gene_median_tpm.gct.gz"),
     "pharos_targets.tsv": _pharos,
     **{f"minikel/{f}": url(f"{MINIKEL}/{f}") for f in ("pp.tsv", "areas.tsv", "indic.tsv", "universe.tsv")},
 }

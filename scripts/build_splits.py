@@ -24,7 +24,8 @@ sc = cfg["splits"]
 
 minikel = labels.minikel(cfg["labels"]["minikel_min_phase"])
 membrane = labels.membrane()
-MINIKEL_ONLY_SPLITS = {"rcnt", "pharos"}  # defined from drug-development data
+waves = labels.minikel_wave_genes(sc["waves"], sc["wave_generic_areas"], cfg["labels"]["minikel_min_phase"])
+MINIKEL_ONLY_SPLITS = {"rcnt", "pharos"} | {f"wave_{w}" for w in sc["waves"]}  # from drug-development data
 first_launch = labels.minikel_first_launch()
 tdl = labels.pharos_tdl()
 
@@ -44,6 +45,9 @@ for uname, members in cfg["universes"].items():
         "minikel": y_mk,
         # nonsense test: the same number of positives on randomly chosen genes
         "minikel_perm": np.random.default_rng(sc["permutation_seed"]).permutation(y_mk),
+        # family control: positives shuffled only within Pfam families
+        "minikel_famperm": splits.permute_within(y_mk, splits.pfam_groups(genes, pfam, singletons=False),
+                                                 sc["permutation_seed"]),
         # positive control: a label known to be learnable (and graph-coherent)
         "membrane": np.array([g in membrane for g in genes], dtype=np.int8),
     }
@@ -74,6 +78,16 @@ for uname, members in cfg["universes"].items():
                 # so they are neither training unlabelled nor test negatives.
                 "pharos": (splits.held_out_positive_split(genes, y, chem, seed, exclude_unl=clin), clin),
             }
+            # therapeutic-wave transfer: train on positives never used in the wave, test on genes
+            # used only in it; genes used in the wave and elsewhere are excluded
+            for w, (pure, touch) in waves.items():
+                test_pos = np.array([g in pure for g in genes]) & (y == 1)
+                if test_pos.sum() < sc["wave_min_test_genes"]:
+                    continue
+                ambiguous = np.array([g in touch and g not in pure for g in genes]) & (y == 1)
+                y_train = ((y == 1) & ~np.array([g in touch for g in genes])).astype(np.int8)
+                made[f"wave_{w}"] = (splits.held_out_positive_split(genes, y_train, test_pos, seed,
+                                                                    exclude_unl=ambiguous), ambiguous)
             if lname != "minikel":
                 made = {k: v for k, v in made.items() if k not in MINIKEL_ONLY_SPLITS}
             for sname, (df, excl) in made.items():

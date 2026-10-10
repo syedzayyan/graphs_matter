@@ -1,7 +1,7 @@
 # Optuna tuning (tune.py). One study per (model, loss, graph condition: real / rewired /
 # empty / none). Train/val folds of the tuning seeds only; test folds are never seen.
 out: results/tuning
-universes: [string, string_exp, intact, reactome_fi, huri]   # one graph each (configs/data.yaml)
+universes: [string, reactome_fi, huri]   # one graph each (configs/data.yaml)
 labels: minikel
 split: random
 seeds: [5, 6]              # dedicated tuning split seeds, never used for evaluation (0-4)

@@ -48,11 +48,12 @@ def regime_genes(universe: str, labels: str, split: str, seed: int) -> dict[str,
 
 
 def delong_z(y: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
-    """DeLong z for AUROC(a) vs AUROC(b), signed so positive means a is better. MLstatkit's
-    Delong_test returns (z, p); only |z| is taken from it and the sign comes from the AUROC
-    difference itself, so the result doesn't depend on the package's sign convention."""
-    z, _ = Delong_test(y, a, b)
-    if not np.isfinite(z):  # identical rankings -> no difference
+    """DeLong z for AUROC(a) vs AUROC(b), signed so positive means a is better.
+    MLstatkit 0.1.91: Delong_test(..., return_ci=False, return_auc=False) -> (z, p) with
+    z = (AUC_B - AUC_A) / se. Only |z| is used; the sign comes from the AUROC difference, and
+    p is recomputed after combining seeds (its p for identical scores is 0, not 1)."""
+    z = Delong_test(y, a, b, return_ci=False, return_auc=False)[0]
+    if not np.isfinite(z):  # degenerate variance (e.g. identical rankings) -> no difference
         return 0.0
     return float(np.sign(roc_auc_score(y, a) - roc_auc_score(y, b)) * abs(z))
 
@@ -106,7 +107,7 @@ def run(exp: str) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    for e in sys.argv[1:] or ["main", "membrane", "nonsense_labels", "nonsense_feats"]:
+    for e in sys.argv[1:] or ["main", "waves", "membrane", "nonsense_labels", "nonsense_feats"]:
         if (RES / e / "results.csv").exists():
             run(e)
         else:

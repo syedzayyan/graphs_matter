@@ -33,7 +33,10 @@ FEATURE_BLOCKS = ("go", "pfam", "pathway", "tract")
 # no_loc drops GO and tractability (both encode subcellular localisation): the feature set
 # for the membrane positive control. random is the nonsense test: Gaussian noise vectors.
 FEATURE_SETS = {"all": FEATURE_BLOCKS, "no_tract": ("go", "pfam", "pathway"),
-                "no_loc": ("pfam", "pathway"), "random": ("noise",)}
+                "no_loc": ("pfam", "pathway"), "random": ("noise",),
+                # attention-free: no GO / pathways / literature / curated structures; uniform
+                # per gene (ESM-2 embeddings, sequence-derived features, GTEx expression)
+                "attn_free": ("esm", "seqfeat", "gtex")}
 SVD_DIM = 256
 GP_BLOCK_DIM = 32
 GP_TOPO_DIM = 16

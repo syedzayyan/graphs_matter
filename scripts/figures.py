@@ -106,6 +106,8 @@ def fig_conditions(ps: pd.DataFrame, graph: str, out: Path):
     models = [m for m in FEATURE_GRAPH_MODELS + ["gp", "mlp_feat_struct", "rf_feat_struct", "labelprop", "rf_struct"]
               if m in set(ps.model)]
     losses = [l for l in ("nnpu", "pn") if l in set(ps.loss)]
+    if not models or not losses:
+        return False
     fig, axes = plt.subplots(1, len(losses), figsize=(5.2 * len(losses), 0.38 * len(models) + 1.6), sharey=True)
     axes = np.atleast_1d(axes)
     for ax, loss in zip(axes, losses):
@@ -147,6 +149,8 @@ def fig_graph_effect(ps: pd.DataFrame, graph: str, out: Path):
     models = [m for m in FEATURE_GRAPH_MODELS + ["gp"] if m in set(sel(ps, graph=graph).model)]
     panels = [(s, l) for s in ("random", "pfam") for l in ("nnpu", "pn")
               if len(sel(ps, graph=graph, split=s, loss=l))]
+    if not models or not panels:
+        return False
     fig, axes = plt.subplots(1, len(panels), figsize=(3.3 * len(panels), 0.42 * len(models) + 1.5), sharey=True, sharex=True,
                              squeeze=False)
     for ax, (split, loss) in zip(axes[0], panels):
@@ -188,6 +192,8 @@ def fig_graph_effect(ps: pd.DataFrame, graph: str, out: Path):
 def fig_graph_only(ps: pd.DataFrame, graph: str, out: Path):
     models = [m for m in ("labelprop", "rf_struct", "gcn_none", "gat_none", "deg_lr") if m in set(sel(ps, graph=graph).model)]
     regimes = [r for r in ("random", "degree", "pfam", "pathway", "hop2", "hop1") if r in set(ps.regime)]
+    if not models:
+        return False
     fig, axes = plt.subplots(1, len(models), figsize=(2.5 * len(models), 3.0), sharey=True, squeeze=False)
     for ax, m in zip(axes[0], models):
         d = sel(ps, graph=graph, model=m, split="random", loss="nnpu", feats=FEATS)
@@ -351,7 +357,7 @@ def fig_compare(effects: dict[str, pd.DataFrame], out: Path):
 def main():
     global FEATS
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exps", nargs="+", default=["main", "membrane", "nonsense_labels", "nonsense_feats"])
+    ap.add_argument("--exps", nargs="+", default=["main", "waves", "membrane", "nonsense_labels", "nonsense_feats"])
     a = ap.parse_args()
     style()
     effects = {}
@@ -369,12 +375,10 @@ def main():
             for graph in [g for g in du.graph.unique() if g != "-"]:
                 out = OUT / exp / graph
                 out.mkdir(parents=True, exist_ok=True)
-                fig_conditions(ps, graph, out)
-                fig_graph_effect(ps, graph, out)
-                fig_graph_only(ps, graph, out)
-                gp_ok = fig_gp(du, graph, out)
-                deg_ok = fig_degree(du, exp, universe, graph, out)
-                print(f"{exp}/{graph}: {3 + bool(gp_ok) + bool(deg_ok)} figures -> {out}", flush=True)
+                drawn = [fig_conditions(ps, graph, out), fig_graph_effect(ps, graph, out),
+                         fig_graph_only(ps, graph, out), fig_gp(du, graph, out),
+                         fig_degree(du, exp, universe, graph, out)]
+                print(f"{exp}/{graph}: {sum(d is not False for d in drawn)} figures -> {out}", flush=True)
     if {"main", "membrane"} <= set(effects):
         fig_compare(effects, OUT / "compare")
         print(f"compare: 6_drug_vs_membrane.png -> {OUT / 'compare'}", flush=True)

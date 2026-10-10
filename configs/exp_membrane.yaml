@@ -4,8 +4,8 @@
 # not for druggability, the druggability task specifically does not benefit from the graph.
 name: membrane
 grid:
-  universe: [string, string_exp, intact, reactome_fi, huri]
-  graph: [string, string_exp, intact, reactome_fi, huri]
+  universe: [string, reactome_fi, huri]
+  graph: [string, reactome_fi, huri]
   copy: [real, rw0, rw1, rw2, empty, pwsub]
   labels: [membrane]
   feats: [no_loc]

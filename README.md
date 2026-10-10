@@ -37,13 +37,14 @@ Other commands:
 
 | Config | Labels | Features | Question |
 |---|---|---|---|
-| `exp_main` | Minikel ≥ Phase III | all; no tractability | Does the graph matter inside graph models for drug targets? |
+| `exp_main` | Minikel ≥ Phase III | all; no tractability; attention-free | Does the graph matter inside graph models for drug targets? Do literature-derived features beat attention-free ones? |
+| `exp_waves` | Minikel, therapeutic-wave splits | all; attention-free | Do models trained on targets from some therapeutic waves recognise targets from another? |
 | `exp_membrane` | membrane vs not (GO:0016020 / GO:0005886) | Pfam + pathway (no GO, no tractability) | Positive control: on a learnable, graph-coherent label, does the graph help? If yes here but not on drug targets, the drug-target task is what makes the graph redundant. |
-| `exp_nonsense_labels` | Minikel labels permuted across genes | all | Every model should score ≈ 0.5. |
+| `exp_nonsense_labels` | Minikel permuted across all genes; Minikel permuted within Pfam families | all | ≈ 0.5 overall. What survives the within-family shuffle was learned from family membership (resemblance to past targets), not from the gene itself. |
 | `exp_nonsense_feats` | Minikel | Gaussian noise vectors | Feature models should score ≈ 0.5; graph models keep only what the graph itself gives. |
 
 All experiments:
-- **Graphs:** all five, each its own test.
+- **Graphs:** all three, each its own test.
 - **Seeds:** 5 evaluation seeds.
 - **Models:** the full ladder.
 - **Conditions:** every graph condition the experiment's config lists.
@@ -64,6 +65,7 @@ All experiments:
 - `graph_sizes.csv`
 - `hub_bias.csv`: degree of positives, and whether it survives controlling for PubMed count.
 - `membrane.csv`: membrane enrichment among the positives.
+- `mediation.csv`: for each feature block, its AUROC overall and within PubMed quintiles, its correlation with PubMed count, and how much its logistic effect shrinks once PubMed count is added. This tests whether the features act through study intensity.
 
 **`results/figures/<exp>/<graph>/`** holds figures 1–5, and `results/figures/compare/6_drug_vs_membrane.png` holds the druggability vs membrane comparison. All figures are drawn by the cluster's summarise job, because figure 5 and the analysis need the data the runs used.
 
@@ -72,20 +74,20 @@ All experiments:
 **Gene IDs.** Everything is keyed on Ensembl gene IDs of HGNC-approved protein-coding genes.
 Symbols map approved > previous > alias, with ambiguous previous/alias symbols dropped.
 
-**Graphs** (undirected, simple, protein-coding only). Each graph has its own gene universe, its own node set. Labels, splits, negatives and tuned hyperparameters are all per graph.
+**Graphs** (undirected, simple, protein-coding only). Three graphs span the range from literature-heavy to literature-free. Each has its own gene universe (its own node set); labels, splits, negatives and tuned hyperparameters are all per graph.
 
-| graph | source | filter |
-|---|---|---|
-| string | STRING v12 | combined_score ≥ 700 |
-| string_exp | STRING v12 | `experiments` channel (not transferred) ≥ 400 |
-| intact | IntAct human–human | MI-score ≥ 0.45; association / physical / direct / enzymatic types (no proximity, no colocalisation) |
-| reactome_fi | Reactome FI 2025-04-14 | curated only: pairs annotated purely `predicted` are dropped (79k of 272k rows) |
-| huri | HuRI | as published |
+| graph | source | filter | character |
+|---|---|---|---|
+| string | STRING v12 | combined_score ≥ 700 | literature + curated + experimental |
+| reactome_fi | Reactome FI 2025-04-14 | curated only: pairs annotated purely `predicted` are dropped (79k of 272k rows) | curated |
+| huri | HuRI | as published | systematic Y2H, literature-free |
+
+STRING-experimental and IntAct are still built as raw edge lists, because their membership bits are part of the edge vectors, but they're no longer tests of their own.
 
 **Known caveats (state them in the paper):**
 - **Database channel:** STRING ≥ 700 includes it, and it imports curated pathways (KEGG, Reactome), so STRING edges partly duplicate the pathway features.
-- **Text-mining channel:** STRING ≥ 700 includes it, and it links genes co-mentioned in papers, drug targets among them. `string_exp` is the clean comparison.
-- **HuRI coverage:** HuRI is a Y2H screen that misses most membrane proteins. It contains about 32% of the Minikel positives, and 72.8% of positives are membrane proteins against 36.2% of other genes. HuRI's universe is therefore small and target-poor; `results/analysis/` quantifies this.
+- **Text-mining channel:** STRING ≥ 700 includes it, and it links genes co-mentioned in papers, drug targets among them. HuRI (systematic Y2H) and Reactome FI (curated) are the comparisons without literature co-mention.
+- **HuRI coverage:** HuRI is a Y2H screen that misses most membrane proteins. It contains about 32% of the Minikel positives, and about 72% of positives are membrane proteins against about 36% of other genes. HuRI's universe is therefore small and target-poor; `results/analysis/` quantifies this.
 - **Hub bias is study bias:** in STRING, positives are hubs, but among equally studied genes degree carries no signal, and PubMed count alone predicts targets at AUROC ≈ 0.85. In experimental graphs, targets are less connected than equally studied genes. `results/analysis/hub_bias.csv` has the numbers.
 
 **Rewiring.** 3 copies per graph, made with igraph double-edge swaps (10 × |E| swaps). Degree sequences are asserted equal, and only 2–6% of the original edges survive.
@@ -95,6 +97,7 @@ Symbols map approved > previous > alias, with ambiguous previous/alias symbols d
 **Labels.**
 - `minikel`: genes whose best target–indication pair reached Phase III or later (`ccat` = max of historical and active phase). Every other gene is unlabelled. Finan Tier 1 was dropped by decision.
 - `minikel_perm`: the same number of positives on randomly chosen genes.
+- `minikel_famperm`: Minikel labels shuffled within Pfam families (genes without Pfam form one group).
 - `membrane`: the positive-control label.
 
 **Features.** Feature blocks reach the models as a 256-d TruncatedSVD, fit label-free on all genes of the universe:
@@ -110,6 +113,12 @@ The feature sets:
 - `no_tract`: no tractability.
 - `no_loc`: Pfam + pathway only, for the membrane control.
 - `random`: Gaussian noise of the same width.
+- `attn_free`: attention-free features, computed or measured the same way for every gene, regardless of how well studied it is.
+  - **ESM-2:** embeddings of the canonical UniProt sequence. Default `esm2_t12_35M`; set in `configs/data.yaml`.
+  - **Sequence-derived:** length, amino-acid composition, and transmembrane helices predicted by Kyte–Doolittle hydropathy.
+  - **GTEx v10:** median expression across tissues.
+  - **Caveat:** ESM embeddings still encode resemblance to known families, so they test annotation bias, not self-similarity. The within-family shuffle tests self-similarity.
+  - **Not included yet:** AlphaFold-derived pocket scores.
 
 **Splits.** 7 seeds each, 70/10/20 train/val/test. Seeds 0–4 are for evaluation; seeds 5–6 are used only for tuning.
 - `random`: stratified.
@@ -117,6 +126,12 @@ The feature sets:
 - `community`: whole Leiden communities (RBConfiguration, resolution 5, seed 0) assigned to folds.
 - `rcnt` *(stand-in, Minikel only)*: test positives are genes first launched in 2021 or later, from Minikel `year_launch`.
 - `pharos` *(stand-in, Minikel only)*: test positives are unlabelled Pharos Tchem genes; unlabelled Tclin genes are excluded. The real Varformer holdouts are in an unpublished `holdout_genes.xlsx`.
+- `wave_<wave>` *(Minikel only)*: therapeutic-wave transfer, using Minikel's indication areas grouped into waves (`configs/data.yaml`).
+  - **Test positives:** genes whose ≥ Phase III indications all fall in that wave.
+  - **Training positives:** genes never targeted in that wave.
+  - **Excluded:** genes targeted in the wave and elsewhere, from training, testing and negatives.
+  - **Generic areas** (signs/symptoms, other, congenital) are ignored.
+  - **Waves** with fewer than 30 single-wave genes on a graph aren't built. Infection has only 4 single-wave genes overall, so it only ever contributes training positives.
 
 **Evaluation negatives** come from the test-fold unlabelled genes, with 5 matched negatives per positive drawn without replacement:
 - `random`: all test-fold unlabelled genes.
@@ -168,7 +183,7 @@ Every graph model runs under each condition it supports:
 - **Why per condition and per graph:** parameters tuned for one graph collapsed the controls on another. For example, GAT on a rewired graph fell from 0.83 to 0.54 AUROC.
 - **Objective:** mean val AUPRC over the tuning split seeds 5–6, which are never evaluated.
 - **Selection bias:** the stored `_val_auprc` is a max over trials, so it is optimistic. Don't compare it across models.
-- **Cluster jobs:** `scripts/hpc/tune.sbatch` runs one array task per (universe, model, condition), 170 tasks. Grids run as disjoint shards (`main.py run … --shard i/n`).
+- **Cluster jobs:** `scripts/hpc/tune.sbatch` runs one array task per (universe, model, condition), 102 tasks. Grids run as disjoint shards (`main.py run … --shard i/n`).
 - **Result filtering:** `manifest.txt` keeps `results.csv` to the current grid.
 
 ## Sources

@@ -73,16 +73,31 @@ def random_split(genes, y, seed):
     return df
 
 
+def pfam_groups(genes, pfam: pd.DataFrame, singletons: bool = True) -> np.ndarray:
+    """Each gene's largest Pfam family (multi-domain proteins would otherwise chain most genes
+    into one component). Genes without Pfam: their own singleton groups, or one shared group."""
+    m = pfam.loc[genes].values
+    has = m.sum(1) > 0
+    primary = np.where(has, np.argmax(m * m.sum(0)[None, :], axis=1), -1)
+    return np.where(has, primary, -(np.arange(len(genes)) + 1) if singletons else -1)
+
+
+def permute_within(y: np.ndarray, groups: np.ndarray, seed: int) -> np.ndarray:
+    """Labels shuffled inside each group: group composition of positives is preserved, which
+    gene within the group is positive is not."""
+    rng = np.random.default_rng(seed)
+    out = y.copy()
+    for g in np.unique(groups):
+        idx = np.flatnonzero(groups == g)
+        out[idx] = y[rng.permutation(idx)]
+    return out
+
+
 def pfam_split(genes, y, pfam: pd.DataFrame, seed):
     """Group genes by their largest Pfam family; genes without Pfam are singletons."""
     rng = np.random.default_rng(seed)
     df = _frame(genes, y)
-    m = pfam.loc[genes].values
-    sizes = m.sum(0)
-    has = m.sum(1) > 0
-    primary = np.where(has, np.argmax(m * sizes[None, :], axis=1), -1)
-    groups = np.where(has, primary, -(np.arange(len(genes)) + 1))
-    _grouped(df, groups, rng)
+    _grouped(df, pfam_groups(genes, pfam), rng)
     return df
 
 
