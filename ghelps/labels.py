@@ -21,6 +21,12 @@ def minikel(min_phase: str = "Phase III") -> set[str]:
     return set(p.loc[p.ccatnum >= PHASE_NUM[min_phase], "ensg"])
 
 
+def minikel_best_phase() -> pd.Series:
+    """ENSG -> best phase any of its target-indication pairs reached (PHASE_NUM: 1 preclinical
+    ... 5 launched). Genes absent have no drug programme in Minikel's data."""
+    return _minikel_pp().groupby("ensg").ccatnum.max()
+
+
 def minikel_first_launch() -> pd.Series:
     """ENSG -> year of the gene's first launched indication (Minikel data runs to 2022)."""
     p = _minikel_pp().dropna(subset=["year_launch"])

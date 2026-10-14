@@ -78,6 +78,15 @@ def pubmed_counts() -> pd.Series:
     return s.rename("pubmed_count")
 
 
+def gene2pubmed_pairs() -> pd.DataFrame:
+    """Human gene2pubmed as (ensg, pmid) pairs, i.e. every paper NCBI links to each gene."""
+    chunks = pd.read_csv(ids.RAW / "gene2pubmed.gz", sep="\t", dtype={"#tax_id": int, "GeneID": str, "PubMed_ID": int},
+                         chunksize=5_000_000)
+    df = pd.concat(c.loc[c["#tax_id"] == 9606, ["GeneID", "PubMed_ID"]] for c in chunks)
+    df["ensg"] = df.GeneID.map(ids.entrez_map())
+    return df.dropna(subset=["ensg"]).rename(columns={"PubMed_ID": "pmid"})[["ensg", "pmid"]].drop_duplicates()
+
+
 # ---------------------------------------------------------------------------------------
 # Attention-free features: computed or measured the same way for every gene, independent of
 # how much it has been studied (no GO, no pathways, no literature, no curated structures).

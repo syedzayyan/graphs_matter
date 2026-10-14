@@ -9,6 +9,7 @@ import json
 import shutil
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -25,28 +26,62 @@ OT = f"https://ftp.ebi.ac.uk/pub/databases/opentargets/platform/{OT_RELEASE}/out
 STRING = "https://stringdb-downloads.org/download"
 MINIKEL = "https://raw.githubusercontent.com/ericminikel/genetic_support/main/data"
 INTACT_HUMAN = "https://ftp.ebi.ac.uk/pub/databases/intact/current/psimitab/species/human.zip"
+EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 HURI = "https://interactome-atlas.org/data/HuRI.tsv"  # the www. host has a mismatched TLS cert
 
 
-def _download(url: str, dest: Path, attempts: int = 5) -> None:
-    """Download to a .part file, then rename. Streaming endpoints (UniProt REST in particular)
-    sometimes drop the connection mid-transfer, so failed attempts are retried with backoff."""
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    req = urllib.request.Request(url, headers={"User-Agent": "ghelps"})
+def _retry(fn, what: str, attempts: int = 5):
+    """Call fn() until it succeeds. Streaming endpoints (UniProt REST in particular) sometimes
+    drop the connection mid-transfer; client errors (4xx except 429) are not retried."""
     for attempt in range(1, attempts + 1):
         try:
-            with urllib.request.urlopen(req, timeout=600) as r, open(tmp, "wb") as f:
-                shutil.copyfileobj(r, f, length=1 << 20)
-            break
+            return fn()
         except (http.client.HTTPException, urllib.error.URLError, OSError) as e:
-            tmp.unlink(missing_ok=True)
             client_error = isinstance(e, urllib.error.HTTPError) and 400 <= e.code < 500 and e.code != 429
             if attempt == attempts or client_error:
                 raise
             wait = 30 * 2 ** (attempt - 1)
-            print(f"[fetch] {dest.name}: attempt {attempt} failed ({e!r}); retrying in {wait}s", flush=True)
+            print(f"[fetch] {what}: attempt {attempt} failed ({e!r}); retrying in {wait}s", flush=True)
             time.sleep(wait)
+
+
+def _download(url: str, dest: Path) -> None:
+    """Download to a .part file, then rename, so a dropped transfer never leaves a truncated file."""
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    req = urllib.request.Request(url, headers={"User-Agent": "ghelps"})
+
+    def once():
+        try:
+            with urllib.request.urlopen(req, timeout=600) as r, open(tmp, "wb") as f:
+                shutil.copyfileobj(r, f, length=1 << 20)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+
+    _retry(once, dest.name)
     tmp.rename(dest)
+
+
+def _pmid_years(dest: Path, step: int = 20_000, max_pmid: int = 45_000_000, batch: int = 200) -> None:
+    """Anchor table PMID -> year the record entered PubMed (Entrez date; publication date if
+    missing), for every `step`-th PMID. PMIDs are assigned on entry, so a monotone fit through
+    these anchors dates any PMID to about a year (scripts/analysis.py). Back-indexed old papers
+    get their (later) entry year, which can only undercount early study."""
+    ids = list(range(step, max_pmid, step))
+    rows = []
+    for i in range(0, len(ids), batch):
+        body = urllib.parse.urlencode({"db": "pubmed", "retmode": "json",
+                                       "id": ",".join(map(str, ids[i:i + batch]))}).encode()
+        req = urllib.request.Request(f"{EUTILS}/esummary.fcgi", data=body, headers={"User-Agent": "ghelps"})
+        res = _retry(lambda: json.load(urllib.request.urlopen(req, timeout=300)), "pubmed esummary")["result"]
+        for uid in res.get("uids", []):
+            r = res[uid]
+            date = next((h["date"] for h in r.get("history", []) if h.get("pubstatus") == "entrez"),
+                        r.get("sortpubdate", ""))
+            if date[:4].isdigit():
+                rows.append((int(uid), int(date[:4])))
+        time.sleep(0.4)  # NCBI allows 3 requests/s without an API key
+    pd.DataFrame(rows, columns=["pmid", "year"]).to_csv(dest, sep="\t", index=False)
 
 
 def url(u: str):
@@ -106,6 +141,7 @@ SOURCES: dict[str, callable] = {
     "reactome_fi.zip": url("https://reactome.org/download/tools/ReactomeFIs/FIsInGene_04142025_with_annotations.txt.zip"),
     "hgnc.tsv": url("https://storage.googleapis.com/public-download-files/hgnc/tsv/tsv/hgnc_complete_set.txt"),
     "gene2pubmed.gz": url("https://ftp.ncbi.nlm.nih.gov/gene/DATA/gene2pubmed.gz"),
+    "pmid_years.tsv": _pmid_years,  # dates gene2pubmed papers (study-before-launch analysis)
     "goa_human.gaf.gz": url("https://current.geneontology.org/annotations/goa_human.gaf.gz"),
     "ensembl2reactome.txt": url("https://reactome.org/download/current/Ensembl2Reactome_All_Levels.txt"),
     "uniprot_human.tsv.gz": url("https://rest.uniprot.org/uniprotkb/stream?query=organism_id:9606+AND+reviewed:true"
