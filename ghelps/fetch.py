@@ -3,9 +3,12 @@ already exist are skipped, so this is safe to re-run and resumes after interrupt
 from __future__ import annotations
 
 import gzip
+import http.client
 import io
 import json
 import shutil
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -25,11 +28,24 @@ INTACT_HUMAN = "https://ftp.ebi.ac.uk/pub/databases/intact/current/psimitab/spec
 HURI = "https://interactome-atlas.org/data/HuRI.tsv"  # the www. host has a mismatched TLS cert
 
 
-def _download(url: str, dest: Path) -> None:
+def _download(url: str, dest: Path, attempts: int = 5) -> None:
+    """Download to a .part file, then rename. Streaming endpoints (UniProt REST in particular)
+    sometimes drop the connection mid-transfer, so failed attempts are retried with backoff."""
     tmp = dest.with_suffix(dest.suffix + ".part")
     req = urllib.request.Request(url, headers={"User-Agent": "ghelps"})
-    with urllib.request.urlopen(req, timeout=600) as r, open(tmp, "wb") as f:
-        shutil.copyfileobj(r, f, length=1 << 20)
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=600) as r, open(tmp, "wb") as f:
+                shutil.copyfileobj(r, f, length=1 << 20)
+            break
+        except (http.client.HTTPException, urllib.error.URLError, OSError) as e:
+            tmp.unlink(missing_ok=True)
+            client_error = isinstance(e, urllib.error.HTTPError) and 400 <= e.code < 500 and e.code != 429
+            if attempt == attempts or client_error:
+                raise
+            wait = 30 * 2 ** (attempt - 1)
+            print(f"[fetch] {dest.name}: attempt {attempt} failed ({e!r}); retrying in {wait}s", flush=True)
+            time.sleep(wait)
     tmp.rename(dest)
 
 
