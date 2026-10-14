@@ -128,9 +128,9 @@ def main() -> None:
     cfg = yaml.safe_load(open(a.config))
     out = ROOT / cfg.get("out", "results/tuning")
     out.mkdir(parents=True, exist_ok=True)
-    storage = f"sqlite:///{out / 'optuna.db'}"
+    storage = storage_for(out)
     n_trials = a.trials or cfg["trials"]
-    print(f"device={device.get()} storage={storage} tuning seeds={cfg['seeds']}", flush=True)
+    print(f"device={device.get()} storage={storage.url} tuning seeds={cfg['seeds']}", flush=True)
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
     for universe in a.universes or cfg["universes"]:
@@ -154,7 +154,15 @@ def main() -> None:
     write_best(out, storage, cfg)
 
 
-def write_best(out: Path, storage: str, cfg: dict) -> None:
+def storage_for(out: Path) -> optuna.storages.RDBStorage:
+    """The shared SQLite study database. ~100 array tasks write to it at once, so wait up to
+    10 min for the write lock instead of SQLite's default 5 s (which crashed tasks with
+    "database is locked")."""
+    return optuna.storages.RDBStorage(f"sqlite:///{out / 'optuna.db'}",
+                                      engine_kwargs={"connect_args": {"timeout": 600}})
+
+
+def write_best(out: Path, storage: optuna.storages.RDBStorage, cfg: dict) -> None:
     """Collect the best params of every finished study of this version into best_params.yaml:
     {universe: {model: {loss: {condition: params}}}}."""
     prefix = _prefix(cfg)
@@ -165,8 +173,11 @@ def write_best(out: Path, storage: str, cfg: dict) -> None:
         universe, model, loss, cond = s.study_name[len(prefix):].split("__")
         best.setdefault(universe, {}).setdefault(model, {}).setdefault(loss, {})[cond] = {
             **_clean(s.best_trial.params), "_val_auprc": round(s.best_trial.value, 4)}
-    with open(out / "best_params.yaml", "w") as f:
+    # every array task rewrites this file, so write a private temp file and rename it into place
+    tmp = out / f"best_params.yaml.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
         yaml.safe_dump(best, f, sort_keys=True)
+    tmp.replace(out / "best_params.yaml")
     n = sum(len(c) for u in best.values() for m in u.values() for c in m.values())
     print(f"wrote {out / 'best_params.yaml'} ({n} model/loss/condition studies)")
 
