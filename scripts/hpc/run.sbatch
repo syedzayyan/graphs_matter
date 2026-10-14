@@ -3,10 +3,10 @@
 #SBATCH -o results/logs/%x.o%A_%a
 #SBATCH -p andrena
 #SBATCH -A pilot_andrena
-#SBATCH -n 12
-#SBATCH --cpus-per-gpu=12
-#SBATCH -t 24:0:0
-#SBATCH --mem-per-cpu=7500M
+#SBATCH -n 8
+#SBATCH --cpus-per-gpu=8
+#SBATCH -t 2:0:0
+#SBATCH --mem-per-cpu=4G
 #SBATCH --gres=gpu:1
 #SBATCH --array=0-7
 
