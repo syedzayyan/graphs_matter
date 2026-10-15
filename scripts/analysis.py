@@ -52,7 +52,7 @@ from sklearn.model_selection import StratifiedKFold
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from ghelps import data, features, labels, paths  # noqa: E402
+from ghelps import data, ensure, features, labels, paths  # noqa: E402
 from ghelps.runner import AXES  # noqa: E402
 
 OUT = ROOT / "results" / "analysis"
@@ -227,6 +227,7 @@ def prediction_audits(universe: str, genes: list[str], graph: str, phase: pd.Ser
 
 
 def main():
+    ensure.ensure_data()  # fetches any raw source added since the data was built (e.g. pmid_years.tsv)
     pos_all = labels.minikel(CFG["labels"]["minikel_min_phase"])
     membrane = labels.membrane()
     sizes, hubs, mem, med, prior, audit, ladder = [], [], [], [], [], [], []

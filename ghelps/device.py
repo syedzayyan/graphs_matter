@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from functools import lru_cache
 
 import torch
@@ -15,3 +16,23 @@ def get() -> torch.device:
     if want == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("GHELPS_DEVICE=cuda but CUDA is not available")
     return torch.device(want)
+
+
+@contextmanager
+def forced(name: str):
+    """Temporarily run on another device (e.g. CPU after a CUDA out-of-memory error)."""
+    old = os.environ.get("GHELPS_DEVICE")
+    os.environ["GHELPS_DEVICE"] = name
+    get.cache_clear()
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop("GHELPS_DEVICE")
+        else:
+            os.environ["GHELPS_DEVICE"] = old
+        get.cache_clear()
+
+
+def is_oom(e: BaseException) -> bool:
+    return isinstance(e, RuntimeError) and "out of memory" in str(e).lower()

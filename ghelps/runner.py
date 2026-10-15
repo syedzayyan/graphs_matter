@@ -102,7 +102,7 @@ def run_id(r: dict) -> str:
 def execute(r: dict, out: Path) -> str:
     import torch
     torch.set_num_threads(1)
-    from ghelps import data, evaluate, train
+    from ghelps import data, device, evaluate, train
 
     rid = run_id(r)
     if (out / "runs" / f"{rid}.json").exists():
@@ -112,7 +112,21 @@ def execute(r: dict, out: Path) -> str:
         hp = {k: v for k, v in r.items() if k not in AXES}
         p = data.load(r["universe"], r["graph"], r["copy"] or "real", r["labels"], r["split"], r["seed"],
                       feats=r["feats"])
-        s, extras = train.score(p, r["model"], r["loss"], r["seed"], **hp)
+        oom = False
+        try:
+            s, extras = train.score(p, r["model"], r["loss"], r["seed"], **hp)
+        except RuntimeError as e:
+            if not device.is_oom(e):
+                raise
+            oom = True
+        if oom:
+            # several workers share one GPU and the exact GP needs ~10 GB, so a run can find the
+            # GPU full; rerun it on the CPU (outside the except block, so the failed attempt's
+            # GPU tensors are released first)
+            torch.cuda.empty_cache()
+            torch.set_num_threads(2)
+            with device.forced("cpu"):
+                s, extras = train.score(p, r["model"], r["loss"], r["seed"], **hp)
         metrics = evaluate.by_regime(s, p.negatives)
         # degree dependence is always measured against the *real* graph's degree so that
         # graph-free and rewired runs are comparable

@@ -16,13 +16,16 @@ test unlabelled; matched regimes: the pooled matched sets). Labels are positive 
 unlabelled, so these compare rankings of known targets against unlabelled genes.
 Needs the processed data the runs used ($GHELPS_DATA), so it runs in the summarise job.
 """
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from MLstatkit.stats import Delong_test
-from scipy.stats import norm
+from MLstatkit import Delong_test
+from scipy.stats import norm, rankdata
 from sklearn.metrics import roc_auc_score
 from statsmodels.stats.multitest import multipletests
 
@@ -35,6 +38,7 @@ KEYS = ["universe", "graph", "labels", "feats", "split", "seed", "model", "loss"
 BASELINE = "rf_feat"  # no-graph reference for "does the graph model beat features alone?"
 
 
+@lru_cache(maxsize=None)
 def regime_genes(universe: str, labels: str, split: str, seed: int) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """regime -> (gene indices, 0/1 labels) exactly as ghelps.evaluate.by_regime scores them."""
     neg = pd.read_parquet(paths.PROCESSED / "splits" / universe / labels / split / f"seed{seed}.neg.parquet")
@@ -51,11 +55,33 @@ def delong_z(y: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
     """DeLong z for AUROC(a) vs AUROC(b), signed so positive means a is better.
     MLstatkit 0.1.91: Delong_test(..., return_ci=False, return_auc=False) -> (z, p) with
     z = (AUC_B - AUC_A) / se. Only |z| is used; the sign comes from the AUROC difference, and
-    p is recomputed after combining seeds (its p for identical scores is 0, not 1)."""
-    z = Delong_test(y, a, b, return_ci=False, return_auc=False)[0]
-    if not np.isfinite(z):  # degenerate variance (e.g. identical rankings) -> no difference
+    p is recomputed after combining seeds (its p for identical scores is 0, not 1).
+    Identical rankings (e.g. a graph condition that leaves a model's scores unchanged) have
+    zero variance, for which MLstatkit falls back to a slow unseeded 5000-sample bootstrap;
+    they are no difference by definition, so z = 0. Other degenerate cases use a seeded,
+    smaller bootstrap."""
+    if np.array_equal(rankdata(a), rankdata(b)):
+        return 0.0
+    z = Delong_test(y, a, b, return_ci=False, return_auc=False, n_boot=1000, random_state=0)[0]
+    if not np.isfinite(z):  # degenerate variance -> no difference
         return 0.0
     return float(np.sign(roc_auc_score(y, a) - roc_auc_score(y, b)) * abs(z))
+
+
+def _compare(task: tuple) -> list[dict]:
+    """All contrasts of one real-graph run, in every evaluation regime."""
+    exp, keys, real_rid, controls, ck = task
+    scores_dir = RES / exp / "scores"
+    s_real = np.load(scores_dir / f"{real_rid}.npy")
+    s_ctrl = {rid: np.load(scores_dir / f"{rid}.npy") for rids in controls.values() for rid in rids}
+    rows = []
+    for regime, (idx, y) in regime_genes(*ck).items():
+        for contrast, rids in controls.items():
+            zs = [delong_z(y, s_real[idx], s_ctrl[rid][idx]) for rid in rids]
+            deltas = [roc_auc_score(y, s_real[idx]) - roc_auc_score(y, s_ctrl[rid][idx]) for rid in rids]
+            rows.append({**keys, "regime": regime, "contrast": contrast,
+                         "z": float(np.mean(zs)), "delta": float(np.mean(deltas))})
+    return rows
 
 
 def run(exp: str) -> pd.DataFrame:
@@ -63,10 +89,7 @@ def run(exp: str) -> pd.DataFrame:
     df = pd.read_csv(out / "results.csv").drop_duplicates("run_id")
     df["copy"] = df["copy"].fillna("none")
     df["feats"] = df["feats"].fillna("all")
-    scores = lambda rid: np.load(out / "scores" / f"{rid}.npy")  # noqa: E731
-    cache: dict = {}
-
-    rows = []
+    tasks = []
     real = df[df["copy"] == "real"]
     base = df[df.model == BASELINE].set_index(["universe", "labels", "feats", "split", "seed", "loss"]).run_id
     cells = {k: g for k, g in df[df["copy"] != "none"].groupby(KEYS)}  # one cell = all conditions of a run
@@ -77,21 +100,11 @@ def run(exp: str) -> pd.DataFrame:
         bkey = (r.universe, r.labels, r.feats, r.split, r.seed, r.loss)
         if r.model != BASELINE and bkey in base.index:
             controls[f"vs_{BASELINE}"] = [base.loc[bkey]]
-        ck = (r.universe, r.labels, r.split, r.seed)
-        if ck not in cache:
-            cache[ck] = regime_genes(*ck)
-        s_real = scores(r.run_id)
-        for regime, (idx, y) in cache[ck].items():
-            for contrast, rids in controls.items():
-                if not rids:
-                    continue
-                zs, deltas = [], []
-                for rid in rids:
-                    s_c = scores(rid)
-                    zs.append(delong_z(y, s_real[idx], s_c[idx]))
-                    deltas.append(roc_auc_score(y, s_real[idx]) - roc_auc_score(y, s_c[idx]))
-                rows.append({**{k: r[k] for k in KEYS}, "regime": regime, "contrast": contrast,
-                             "z": float(np.mean(zs)), "delta": float(np.mean(deltas))})
+        controls = {c: rids for c, rids in controls.items() if rids}
+        tasks.append((exp, {k: r[k] for k in KEYS}, r.run_id, controls, (r.universe, r.labels, r.split, int(r.seed))))
+    workers = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count() or 1))
+    with ProcessPoolExecutor(workers) as ex:
+        rows = [row for rs in ex.map(_compare, tasks, chunksize=16) for row in rs]
     per_seed = pd.DataFrame(rows)
     group = [k for k in KEYS if k != "seed"] + ["regime", "contrast"]
     g = per_seed.groupby(group)

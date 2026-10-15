@@ -272,9 +272,12 @@ def fig_degree(df: pd.DataFrame, exp: str, universe: str, graph: str, out: Path)
               f"{len(deg)} -- point GHELPS_DATA at the processed data the runs used", flush=True)
         return False
     runs = sel(df, split="random", loss="nnpu", feats=FEATS, regime="random").drop_duplicates("run_id")
+    if runs.empty:  # e.g. the waves experiment has no random split
+        return False
+    labels = runs.labels.iloc[0]  # main.py filters to one label set per figure
     pos_rows, score_rows = [], []
-    for seed in range(5):
-        s = pd.read_parquet(paths.PROCESSED / "splits" / universe / "minikel" / "random" / f"seed{seed}.parquet")
+    for seed in sorted(runs.seed.unique()):
+        s = pd.read_parquet(paths.PROCESSED / "splits" / universe / labels / "random" / f"seed{seed}.parquet")
         te = (s.fold == "test").values
         dec = pd.qcut(pd.Series(deg[te]).rank(method="first"), 10, labels=False).values
         pos_rows.append(pd.DataFrame({"decile": dec, "y": s.y.values[te]}))
@@ -369,11 +372,12 @@ def main():
         feats = set(df.feats)
         FEATS = "all" if "all" in feats else sorted(feats)[0]
         effects[exp] = per_seed(df[df.feats == FEATS])
-        for universe in sorted(df.universe.unique()):
-            du = df[df.universe == universe]
+        label_sets = sorted(df.labels.unique())  # e.g. nonsense_labels: fully vs within-family shuffled
+        for lab, universe in [(lab, u) for lab in label_sets for u in sorted(df.universe.unique())]:
+            du = df[(df.universe == universe) & (df.labels == lab)]
             ps = per_seed(du)
             for graph in [g for g in du.graph.unique() if g != "-"]:
-                out = OUT / exp / graph
+                out = OUT / exp / (lab if len(label_sets) > 1 else "") / graph
                 out.mkdir(parents=True, exist_ok=True)
                 drawn = [fig_conditions(ps, graph, out), fig_graph_effect(ps, graph, out),
                          fig_graph_only(ps, graph, out), fig_gp(du, graph, out),
