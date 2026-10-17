@@ -120,7 +120,7 @@ def run(exp: str) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    for e in sys.argv[1:] or ["main", "waves", "membrane", "nonsense_labels", "nonsense_feats"]:
+    for e in sys.argv[1:] or ["main", "waves", "membrane", "nonsense_labels", "nonsense_feats", "novelty"]:
         if (RES / e / "results.csv").exists():
             run(e)
         else:

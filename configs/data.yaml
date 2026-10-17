@@ -53,6 +53,8 @@ splits:
   leiden_resolution: 5.0     # ~70-85 communities, none > 5% of genes
   leiden_seed: 0
   recent_from_year: 2021          # rcnt stand-in: first Minikel launch >= this year
+  time_split_year: 2010           # time split: train on targets first drugged (ChEMBL first approval)
+                                  # before this year, test on targets first drugged from it on
   neg_per_pos: 5                  # matched negatives per test positive
   pathway_match_max_genes: 100    # same-pathway negatives use specific pathways only
   label_sets: [minikel, minikel_perm, minikel_famperm, membrane]

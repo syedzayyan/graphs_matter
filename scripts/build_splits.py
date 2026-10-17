@@ -5,6 +5,8 @@ Output: data/processed/splits/<universe>/<labelset>/
   communities.parquet              Leiden membership on the union graph (computed once)
   <split>/seed<s>.parquet          gene, fold, y
   <split>/seed<s>.neg.parquet      regime, pos, neg  (node indices; -1 = "all")
+  time/pubmed.parquet              PubMed counts before the time split's cut-off year
+Splits: random, pfam, community, rcnt, pharos, wave_<w>, time (the last four Minikel only).
   summary.tsv
 """
 import sys
@@ -15,7 +17,7 @@ import pandas as pd
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ghelps import labels, paths, splits, structure  # noqa: E402
+from ghelps import features, labels, paths, splits, structure  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 P = paths.PROCESSED
@@ -25,9 +27,12 @@ sc = cfg["splits"]
 minikel = labels.minikel(cfg["labels"]["minikel_min_phase"])
 membrane = labels.membrane()
 waves = labels.minikel_wave_genes(sc["waves"], sc["wave_generic_areas"], cfg["labels"]["minikel_min_phase"])
-MINIKEL_ONLY_SPLITS = {"rcnt", "pharos"} | {f"wave_{w}" for w in sc["waves"]}  # from drug-development data
+MINIKEL_ONLY_SPLITS = {"rcnt", "pharos", "time"} | {f"wave_{w}" for w in sc["waves"]}  # from drug-development data
 first_launch = labels.minikel_first_launch()
 tdl = labels.pharos_tdl()
+first_approval = labels.target_first_approval()
+T = sc["time_split_year"]
+pubmed_years = features.pubmed_by_year()
 
 rows = []
 for uname, members in cfg["universes"].items():
@@ -58,6 +63,8 @@ for uname, members in cfg["universes"].items():
 
     recent = np.array([first_launch.get(g, 0) >= sc["recent_from_year"] for g in genes])
     t = np.array([tdl.get(g, "") for g in genes])
+    approved = np.array([first_approval.get(g, np.nan) for g in genes], dtype=float)
+    pubmed_T = pubmed_years.reindex(genes, fill_value=0)[T - 1].values  # papers before the cut-off
 
     for lname in sc["label_sets"]:
         y = label_sets[lname]
@@ -88,14 +95,25 @@ for uname, members in cfg["universes"].items():
                 y_train = ((y == 1) & ~np.array([g in touch for g in genes])).astype(np.int8)
                 made[f"wave_{w}"] = (splits.held_out_positive_split(genes, y_train, test_pos, seed,
                                                                     exclude_unl=ambiguous), ambiguous)
+            # time split: train on targets first drugged before T, test on targets first drugged
+            # from T on (ChEMBL first approval). Positives without an approval date (Phase III
+            # only, or no ChEMBL mechanism) can't be placed in time: excluded everywhere.
+            undated = (y == 1) & np.isnan(approved)
+            made["time"] = (splits.held_out_positive_split(genes, ((y == 1) & (approved < T)).astype(np.int8),
+                                                           (y == 1) & (approved >= T), seed,
+                                                           exclude_unl=undated), undated)
             if lname != "minikel":
                 made = {k: v for k, v in made.items() if k not in MINIKEL_ONLY_SPLITS}
             for sname, (df, excl) in made.items():
                 d = out / sname
                 d.mkdir(exist_ok=True)
+                if sname == "time" and seed == 0:  # study as known at the cut-off (data.load)
+                    pd.DataFrame({"pubmed_count": pubmed_T}, index=pd.Index(genes, name="ensg")) \
+                        .to_parquet(d / "pubmed.parquet")
                 df.to_parquet(d / f"seed{seed}.parquet")
+                # time split: study-matched negatives use what was known at the cut-off
                 neg = splits.negatives(df, a_union, pfam.values, pw.values, sc["neg_per_pos"], seed, excl,
-                                       pubmed=pubmed)
+                                       pubmed=pubmed_T if sname == "time" else pubmed)
                 neg.to_parquet(d / f"seed{seed}.neg.parquet")
                 fc = df.groupby(["fold", "y"]).size()
                 row = {"universe": uname, "labels": lname, "split": sname, "seed": seed,
@@ -105,7 +123,9 @@ for uname, members in cfg["universes"].items():
                     row[f"neg_{r}_poscov"] = g.pos.nunique() / max(npos, 1)
                 rows.append(row)
         print(f"[{uname}/{lname}] positives {y.sum()}, recent {int((recent & (y == 1)).sum())}, "
-              f"Tchem-unlabelled {int(chem.sum())}")
+              f"Tchem-unlabelled {int(chem.sum())}, first drugged <{T} / >={T} / undated "
+              f"{int(((y == 1) & (approved < T)).sum())} / {int(((y == 1) & (approved >= T)).sum())} / "
+              f"{int(((y == 1) & np.isnan(approved)).sum())}")
 
 summary = pd.DataFrame(rows)
 summary.to_csv(P / "splits" / "summary.tsv", sep="\t", index=False)

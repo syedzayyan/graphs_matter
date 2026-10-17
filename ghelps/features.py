@@ -87,6 +87,22 @@ def gene2pubmed_pairs() -> pd.DataFrame:
     return df.dropna(subset=["ensg"]).rename(columns={"PubMed_ID": "pmid"})[["ensg", "pmid"]].drop_duplicates()
 
 
+PUBMED_YEARS = np.arange(1950, 2027)
+
+
+def pubmed_by_year() -> pd.DataFrame:
+    """ENSG x year -> cumulative number of gene2pubmed papers entered by the end of that year.
+    Papers are dated by PMID via a monotone fit through PubMed entry dates (fetch.py:
+    pmid_years.tsv); back-indexed old papers get their later entry year."""
+    from sklearn.isotonic import IsotonicRegression
+    anchors = pd.read_csv(ids.RAW / "pmid_years.tsv", sep="\t")
+    fit = IsotonicRegression(out_of_bounds="clip").fit(anchors.pmid, anchors.year)
+    pairs = gene2pubmed_pairs()
+    pairs["year"] = np.clip(np.round(fit.predict(pairs.pmid)).astype(int), PUBMED_YEARS[0], PUBMED_YEARS[-1])
+    counts = pd.crosstab(pairs.ensg, pairs.year).reindex(columns=PUBMED_YEARS, fill_value=0)
+    return counts.cumsum(axis=1)
+
+
 # ---------------------------------------------------------------------------------------
 # Attention-free features: computed or measured the same way for every gene, independent of
 # how much it has been studied (no GO, no pathways, no literature, no curated structures).

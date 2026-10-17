@@ -13,14 +13,19 @@ mediation.csv     is the feature -> label association mediated by study intensit
                   feature block: out-of-fold logistic score s, its AUROC overall and within
                   PubMed quintiles, corr(s, log PubMed), and the shrinkage of s's logistic
                   coefficient when log PubMed is added (1 - b_adjusted / b_alone)
-prior_study.csv   was study intensity there *before* approval? For genes whose first drug
-                  launched 1990-2022 (Minikel), PubMed papers about the gene dated before the
-                  launch year (and 10 years before), as a percentile among the universe's genes
-                  at that time, and as an AUROC against genes that never got a drug programme
-                  (ranked by their own counts at the same date). Papers are dated by PMID via a
-                  monotone fit through PubMed entry dates (fetch.py: pmid_years.tsv).
-topk_audit.csv    what do the models "discover"? Per run of results/main (minikel, all features,
-                  random split; real / empty / no graph), the top-100 ranked test-fold
+prior_study.csv   was study intensity there *before* approval? For Minikel >= Phase III genes
+                  first drugged 1980-2024 (first approval of any drug acting on them, ChEMBL),
+                  PubMed papers about the gene dated before that year (and 10 years before), as
+                  a percentile among the universe's genes at that time, and as an AUROC against
+                  genes that never got a drug programme (ranked by their own counts at the same
+                  date). Papers are dated by PMID via a monotone fit through PubMed entry dates
+                  (fetch.py: pmid_years.tsv). Minikel's year_launch is not used: it dates the
+                  launch of one indication, often decades after the target was first drugged.
+study_leak.csv    how much study intensity does each feature set carry? Out-of-fold RF
+                  prediction of log PubMed count from the features: Spearman(prediction, log
+                  PubMed). Includes the residualised sets (ghelps/data.py: *_resid).
+topk_audit.csv    what do the models "discover"? Per run of results/main (minikel, random split;
+                  feature sets all / no_tract / attn_free; real / empty / no graph), the top-100 ranked test-fold
                   unlabelled genes: PubMed percentile, share in the top PubMed decile, share
                   already in a drug programme (Minikel preclinical-Phase II), share sharing a
                   Pfam domain with a known (train/val) target, share within 1 hop of a known
@@ -32,7 +37,17 @@ phase_ladder.csv  trained on >= Phase III only, do models rank test-fold genes w
                   programme (preclinical / Phase I / Phase II) above genes with none? AUROC
                   overall, per phase, and within PubMed quintiles (does it survive at equal
                   study?), next to the PubMed-only ranker. Mean over seeds.
-topk_audit and phase_ladder need results/main (the summarise job runs this after collecting it).
+time_novelty.csv  time split (results/novelty, split "time"): trained on targets first drugged
+                  before 2010, how well are the targets first drugged from 2010 on found, by how
+                  novel they were in 2010? Strata of the future targets: study before 2010
+                  (PubMed percentile < 0.5 / 0.5-0.9 / >= 0.9), Pfam family already drugged or
+                  not, hops to the nearest known target in the real graph (1 / 2 / 3+), and
+                  "novel" (not top-decile study, new family, >= 2 hops). Per stratum: AUROC vs
+                  all test unlabelled genes, and recall in the top 10% of the test ranking.
+                  Reference rankers: PubMed before 2010, PubMed now (leaks the future), number
+                  of known targets sharing a Pfam domain, and closeness to known targets.
+topk_audit and phase_ladder need results/main, time_novelty results/novelty (the summarise
+job runs this after collecting them).
 
 Uses $GHELPS_DATA, so on the cluster it describes exactly the data the runs used.
 """
@@ -45,7 +60,6 @@ import yaml
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import dijkstra
 from scipy.stats import mannwhitneyu, rankdata, spearmanr
-from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
@@ -102,18 +116,8 @@ def mediation(universe: str, y: np.ndarray, lpm: np.ndarray, quint: np.ndarray, 
 # ---------------------------------------------------------------------------------------
 # Study before approval
 
-LAUNCH_PERIODS = [(1990, 1999), (2000, 2009), (2010, 2022)]
-YEARS = np.arange(1950, 2027)
-
-
-def gene_year_counts() -> pd.DataFrame:
-    """ENSG x year -> cumulative number of gene2pubmed papers entered by the end of that year."""
-    anchors = pd.read_csv(paths.RAW / "pmid_years.tsv", sep="\t")
-    fit = IsotonicRegression(out_of_bounds="clip").fit(anchors.pmid, anchors.year)
-    pairs = features.gene2pubmed_pairs()
-    pairs["year"] = np.clip(np.round(fit.predict(pairs.pmid)).astype(int), YEARS[0], YEARS[-1])
-    counts = pd.crosstab(pairs.ensg, pairs.year).reindex(columns=YEARS, fill_value=0)
-    return counts.cumsum(axis=1)
+LAUNCH_PERIODS = [(1980, 1999), (2000, 2009), (2010, 2024)]
+YEARS = features.PUBMED_YEARS
 
 
 def prior_study(universe: str, genes: list[str], cum: pd.DataFrame, launch: pd.Series, phase: pd.Series) -> list[dict]:
@@ -145,6 +149,7 @@ def prior_study(universe: str, genes: list[str], cum: pd.DataFrame, launch: pd.S
 # What the trained models rank highly (needs results/main from the cluster)
 
 AUDIT_EXP, TOP_K = "main", 100
+AUDIT_FEATS = ("all", "no_tract", "attn_free")  # does dropping literature features stop the study-bias cycle?
 
 
 def _run_table(universe: str) -> pd.DataFrame | None:
@@ -155,7 +160,7 @@ def _run_table(universe: str) -> pd.DataFrame | None:
     df["copy"] = df["copy"].fillna("none")
     df["feats"] = df["feats"].fillna("all")
     df["graph"] = df["graph"].fillna("none")
-    return df[(df.universe == universe) & (df.labels == "minikel") & (df.feats == "all") & (df.split == "random")
+    return df[(df.universe == universe) & (df.labels == "minikel") & df.feats.isin(AUDIT_FEATS) & (df.split == "random")
               & df["copy"].isin(["real", "empty", "none"])]
 
 
@@ -206,10 +211,10 @@ def prediction_audits(universe: str, genes: list[str], graph: str, phase: pd.Ser
         refs = {("pubmed_only", "none", "-"): pm[cand], ("all test unlabelled", "none", "-"): None}
         for (model, copy, loss), s_cand in refs.items():
             top = cand if s_cand is None else pm_top
-            audit.append(dict(seed=seed, graph=graph, copy=copy, model=model, loss=loss,
-                              **_top_metrics(top, s_cand, **ctx)))
+            key = dict(seed=seed, graph=graph, copy=copy, feats="-", model=model, loss=loss)
+            audit.append(dict(**key, **_top_metrics(top, s_cand, **ctx)))
             if s_cand is not None:
-                ladder.append(dict(seed=seed, graph=graph, copy=copy, model=model, loss=loss, **_ladder(s_cand, cand, ph, pm)))
+                ladder.append(dict(**key, **_ladder(s_cand, cand, ph, pm)))
         for r in rs.itertuples():
             f = scores_dir / f"{r.run_id}.npy"
             if not f.exists():
@@ -217,28 +222,110 @@ def prediction_audits(universe: str, genes: list[str], graph: str, phase: pd.Ser
             s = np.load(f).astype(float)
             s_cand = s[cand]
             top = cand[np.argsort(-s_cand, kind="stable")[:TOP_K]]
-            key = dict(seed=seed, graph=graph, copy=r.copy, model=r.model, loss=r.loss)
+            key = dict(seed=seed, graph=graph, copy=r.copy, feats=r.feats, model=r.model, loss=r.loss)
             audit.append(dict(**key, **_top_metrics(top, s_cand, **ctx)))
             ladder.append(dict(**key, **_ladder(s_cand, cand, ph, pm)))
-    mean = lambda rows: (pd.DataFrame(rows).groupby(["graph", "copy", "model", "loss"], sort=False)  # noqa: E731
+    mean = lambda rows: (pd.DataFrame(rows).groupby(["graph", "copy", "feats", "model", "loss"], sort=False)  # noqa: E731
                          .mean(numeric_only=True).drop(columns="seed").reset_index()
                          .assign(universe=universe).to_dict("records"))
     return mean(audit), mean(ladder)
+
+
+# ---------------------------------------------------------------------------------------
+# How much study intensity each feature set carries
+
+LEAK_FEATS = ("all", "no_tract", "attn_free", "all_resid", "attn_free_resid")
+
+
+def study_leak(universe: str) -> list[dict]:
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.model_selection import cross_val_predict
+    lpm = np.log1p(data.pubmed_counts(universe))
+    rows = []
+    for feats in LEAK_FEATS:
+        x = data.features(universe, feats)[:, :64]  # leading SVD components
+        pred = cross_val_predict(RandomForestRegressor(200, max_features=0.3, n_jobs=-1, random_state=0), x, lpm,
+                                 cv=StratifiedKFold(3, shuffle=True, random_state=0).split(x, lpm > np.median(lpm)))
+        rows.append(dict(universe=universe, feats=feats, rho_rf_pred_log_pubmed=spearmanr(pred, lpm).statistic))
+    return rows
+
+
+# ---------------------------------------------------------------------------------------
+# Time split: are future targets found, and which ones?
+
+NOVELTY_EXP, NOVELTY_RECALL_FRAC = "novelty", 0.10
+
+
+def time_novelty(universe: str, genes: list[str], graph: str, cum: pd.DataFrame, first_drugged: pd.Series) -> list[dict]:
+    f = ROOT / "results" / NOVELTY_EXP / "results.csv"
+    if not f.exists():
+        print(f"skip time_novelty for {universe}: no results/{NOVELTY_EXP} runs", flush=True)
+        return []
+    runs = pd.read_csv(f, usecols=["run_id", *AXES]).drop_duplicates("run_id")
+    runs["copy"] = runs["copy"].fillna("none")
+    runs = runs[(runs.universe == universe) & (runs.split == "time") & runs["copy"].isin(["real", "empty", "none"])]
+    if runs.empty:
+        return []
+    T = CFG["splits"]["time_split_year"]
+    pm_T = cum.reindex(genes, fill_value=0)[T - 1].values.astype(float)
+    pct_T = rankdata(pm_T) / len(pm_T)
+    pm_now = data.pubmed_counts(universe).astype(float)
+    pfam = pd.read_parquet(paths.PROCESSED / "features" / universe / "pfam.parquet").reindex(genes, fill_value=0).values > 0
+    ei = np.load(paths.PROCESSED / "graphs" / universe / f"{graph}.real.npy")
+    adj = coo_matrix((np.ones(len(ei)), (ei[:, 0], ei[:, 1])), shape=(len(genes),) * 2).tocsr()
+    rows = []
+    for seed, rs in runs.groupby("seed"):
+        sp = pd.read_parquet(paths.PROCESSED / "splits" / universe / "minikel" / "time" / f"seed{seed}.parquet")
+        assert (sp.gene.values == np.array(genes)).all()
+        y, fold = sp.y.values, sp.fold.values
+        test = np.flatnonzero(fold == "test")
+        known = (fold != "test") & (fold != "excluded") & (y == 1)  # first drugged before T
+        fam_known = pfam[:, pfam[known].any(0)].sum(1)               # known targets' domains shared
+        hops = dijkstra(adj, directed=False, unweighted=True, indices=np.flatnonzero(known), min_only=True)
+        fut = y[test] == 1
+        t_pct, t_fam, t_hop = pct_T[test], fam_known[test] > 0, hops[test]
+        strata = {"all": np.ones(len(test), bool),
+                  "study<0.5": t_pct < 0.5, "study 0.5-0.9": (t_pct >= 0.5) & (t_pct < 0.9), "study>=0.9": t_pct >= 0.9,
+                  "drugged family": t_fam, "new family": ~t_fam,
+                  "1 hop": t_hop <= 1, "2 hops": t_hop == 2, "3+ hops": t_hop >= 3,
+                  "novel": (t_pct < 0.9) & ~t_fam & (t_hop >= 2)}
+        refs = {"pubmed_before_T": pm_T, "pubmed_now": pm_now,
+                "known_family_count": fam_known + 1e-3 * rankdata(pm_T),  # PubMed breaks ties
+                "closeness_to_known": -np.minimum(hops, 50) + 1e-3 * rankdata(pm_T) / len(pm_T)}
+        scored = [(dict(copy="none", feats="-", model=k, loss="-"), v) for k, v in refs.items()]
+        for r in rs.itertuples():
+            sf = ROOT / "results" / NOVELTY_EXP / "scores" / f"{r.run_id}.npy"
+            if sf.exists():
+                scored.append((dict(copy=r.copy, feats=r.feats, model=r.model, loss=r.loss), np.load(sf).astype(float)))
+        for key, s in scored:
+            st = s[test]
+            top = st >= np.quantile(st, 1 - NOVELTY_RECALL_FRAC)
+            for name, m in strata.items():
+                sel = (fut & m) | ~fut                             # this stratum's positives vs all negatives
+                n = int((fut & m).sum())
+                rows.append(dict(universe=universe, graph=graph, seed=seed, **key, stratum=name, n_future=n,
+                                 auroc=auc(fut[sel].astype(int), st[sel]) if n else np.nan,
+                                 recall_top10pct=top[fut & m].mean() if n else np.nan))
+    return (pd.DataFrame(rows).groupby(["universe", "graph", "copy", "feats", "model", "loss", "stratum"], sort=False)
+            .mean(numeric_only=True).drop(columns="seed").reset_index().to_dict("records"))
 
 
 def main():
     ensure.ensure_data()  # fetches any raw source added since the data was built (e.g. pmid_years.tsv)
     pos_all = labels.minikel(CFG["labels"]["minikel_min_phase"])
     membrane = labels.membrane()
-    sizes, hubs, mem, med, prior, audit, ladder = [], [], [], [], [], [], []
-    phase, launch = labels.minikel_best_phase(), labels.minikel_first_launch()
-    cum = gene_year_counts()
+    sizes, hubs, mem, med, prior, audit, ladder, leak, novelty = [], [], [], [], [], [], [], [], []
+    phase = labels.minikel_best_phase()
+    first_drugged = labels.target_first_approval()
+    launch = first_drugged[first_drugged.index.isin(pos_all)]
+    cum = features.pubmed_by_year()
     for universe, members in CFG["universes"].items():
         genes = data.genes_of(universe)
         y = np.array([g in pos_all for g in genes], dtype=int)
         is_mem = np.array([g in membrane for g in genes])
         pm = data.pubmed_counts(universe)
         prior += prior_study(universe, genes, cum, launch, phase)
+        leak += study_leak(universe)
         lpm = np.log1p(pm)
         quint = pd.qcut(pd.Series(lpm).rank(method="first"), 5, labels=False).values
         for graph in members:
@@ -271,8 +358,10 @@ def main():
             a, l = prediction_audits(universe, genes, graph, phase)
             audit += a
             ladder += l
+            novelty += time_novelty(universe, genes, graph, cum, first_drugged)
     for name, rows in (("graph_sizes", sizes), ("hub_bias", hubs), ("membrane", mem), ("mediation", med),
-                       ("prior_study", prior), ("topk_audit", audit), ("phase_ladder", ladder)):
+                       ("prior_study", prior), ("study_leak", leak), ("topk_audit", audit),
+                       ("phase_ladder", ladder), ("time_novelty", novelty)):
         if not rows:
             continue
         t = pd.DataFrame(rows)

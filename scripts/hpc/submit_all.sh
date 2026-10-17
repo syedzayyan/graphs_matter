@@ -5,8 +5,8 @@
 #   bash scripts/hpc/submit_all.sh
 set -euo pipefail
 mkdir -p results/logs   # slurm -o paths point here and slurm won't create the directory
-EXPS=(main waves membrane nonsense_labels nonsense_feats)
-declare -A SHARDS=([main]=12 [waves]=3 [membrane]=2 [nonsense_labels]=1 [nonsense_feats]=1)
+EXPS=(main waves membrane nonsense_labels nonsense_feats novelty)
+declare -A SHARDS=([main]=12 [waves]=3 [membrane]=2 [nonsense_labels]=1 [nonsense_feats]=1 [novelty]=3)
 N_TUNE=$(uv run python -c "from tune import task_list; print(len(task_list()))" 2>/dev/null | tail -1)
 
 prep=$(sbatch --parsable scripts/hpc/prepare.sbatch)

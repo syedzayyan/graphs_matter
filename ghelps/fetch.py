@@ -84,6 +84,41 @@ def _pmid_years(dest: Path, step: int = 20_000, max_pmid: int = 45_000_000, batc
     pd.DataFrame(rows, columns=["pmid", "year"]).to_csv(dest, sep="\t", index=False)
 
 
+def _chembl_pages(endpoint: str, key: str, **params) -> list[dict]:
+    """Every record of a ChEMBL REST list endpoint (follows page_meta.next)."""
+    rows, nxt = [], f"/chembl/api/data/{endpoint}.json?" + urllib.parse.urlencode({"limit": 1000, **params})
+    while nxt:
+        req = urllib.request.Request("https://www.ebi.ac.uk" + nxt, headers={"User-Agent": "ghelps"})
+        page = _retry(lambda: json.load(urllib.request.urlopen(req, timeout=300)), f"chembl {endpoint}")
+        rows += page[key]
+        nxt = page["page_meta"]["next"]
+    return rows
+
+
+def _chembl_approvals(dest: Path) -> None:
+    """Approved drug -> human protein target -> UniProt, with the drug's first approval year
+    (ChEMBL mechanisms of action). A target's earliest year is when it was first drugged;
+    Minikel's year_launch is the launch of a specific indication, often decades later."""
+    mech = pd.DataFrame(_chembl_pages("mechanism", "mechanisms", only="molecule_chembl_id,target_chembl_id"))
+    mol = pd.DataFrame(_chembl_pages("molecule", "molecules", max_phase=4,
+                                     only="molecule_chembl_id,first_approval"))
+    mech = mech.dropna().merge(mol.dropna(), on="molecule_chembl_id")
+    tids = sorted(mech.target_chembl_id.unique())
+    targets = []
+    for i in range(0, len(tids), 100):
+        targets += _chembl_pages("target", "targets", target_chembl_id__in=",".join(tids[i:i + 100]),
+                                 only="target_chembl_id,target_type,organism,target_components")
+    # single proteins and complexes (every subunit is drugged); protein families / selectivity
+    # groups would credit every member of a family for one drug
+    comp = [(t["target_chembl_id"], c["accession"]) for t in targets
+            if t["organism"] == "Homo sapiens" and t["target_type"] in ("SINGLE PROTEIN", "PROTEIN COMPLEX")
+            for c in t["target_components"] if c.get("accession")]
+    out = mech.merge(pd.DataFrame(comp, columns=["target_chembl_id", "uniprot"]), on="target_chembl_id")
+    out["first_approval"] = out.first_approval.astype(int)
+    out[["uniprot", "molecule_chembl_id", "target_chembl_id", "first_approval"]].drop_duplicates() \
+        .to_csv(dest, sep="\t", index=False)
+
+
 def url(u: str):
     return lambda dest: _download(u, dest)
 
@@ -142,6 +177,7 @@ SOURCES: dict[str, callable] = {
     "hgnc.tsv": url("https://storage.googleapis.com/public-download-files/hgnc/tsv/tsv/hgnc_complete_set.txt"),
     "gene2pubmed.gz": url("https://ftp.ncbi.nlm.nih.gov/gene/DATA/gene2pubmed.gz"),
     "pmid_years.tsv": _pmid_years,  # dates gene2pubmed papers (study-before-launch analysis)
+    "chembl_approvals.tsv": _chembl_approvals,  # dates when each target was first drugged (time split)
     "goa_human.gaf.gz": url("https://current.geneontology.org/annotations/goa_human.gaf.gz"),
     "ensembl2reactome.txt": url("https://reactome.org/download/current/Ensembl2Reactome_All_Levels.txt"),
     "uniprot_human.tsv.gz": url("https://rest.uniprot.org/uniprotkb/stream?query=organism_id:9606+AND+reviewed:true"

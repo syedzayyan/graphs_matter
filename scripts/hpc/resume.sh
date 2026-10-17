@@ -1,15 +1,18 @@
 #!/bin/bash
-# Re-run experiment grids (e.g. after a code fix), then summaries + analysis + figures.
+# Prepare (fetch + build whatever is missing), re-run experiment grids (e.g. after a code fix),
+# then summaries + analysis + figures + DeLong.
 # Finished runs and finished tuning studies are skipped. From the repo root:
-#   bash scripts/hpc/resume.sh [experiment ...]               (default: all five)
+#   bash scripts/hpc/resume.sh [experiment ...]               (default: all six)
 #   RETUNE=31,43,46 bash scripts/hpc/resume.sh                re-run those tune array tasks first
 set -euo pipefail
 mkdir -p results/logs
-EXPS=("$@"); [ ${#EXPS[@]} -eq 0 ] && EXPS=(main waves membrane nonsense_labels nonsense_feats)
-declare -A SHARDS=([main]=12 [waves]=3 [membrane]=2 [nonsense_labels]=1 [nonsense_feats]=1)
-after=""
+EXPS=("$@"); [ ${#EXPS[@]} -eq 0 ] && EXPS=(main waves membrane nonsense_labels nonsense_feats novelty)
+declare -A SHARDS=([main]=12 [waves]=3 [membrane]=2 [nonsense_labels]=1 [nonsense_feats]=1 [novelty]=3)
+# fetch new raw sources and build missing processed data once, before any run job does it
+prep=$(sbatch --parsable scripts/hpc/prepare.sbatch)
+after="--dependency=afterok:${prep} --kill-on-invalid-dep=yes"; echo "prepare: ${prep}"
 if [ -n "${RETUNE:-}" ]; then
-  tune=$(sbatch --parsable --array="${RETUNE}" scripts/hpc/tune.sbatch)
+  tune=$(sbatch --parsable --array="${RETUNE}" ${after} scripts/hpc/tune.sbatch)
   after="--dependency=afterok:${tune} --kill-on-invalid-dep=yes"; echo "tune (${RETUNE}): ${tune}"
 fi
 deps=""

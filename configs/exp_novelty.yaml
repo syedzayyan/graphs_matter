@@ -1,0 +1,20 @@
+# Are Phase >= III labels any use for finding *new* targets?
+#   time split: train on targets first drugged before 2010 (ChEMBL first approval), test on
+#     targets first drugged from 2010 on. scripts/analysis.py (time_novelty.csv) breaks the
+#     future targets down by how novel they were at 2010: study at the time, a Pfam family
+#     already drugged or not, graph distance to the known targets.
+#   pn_pubmed: training negatives matched to the positives on PubMed count (as known in 2010
+#     for the time split), so study intensity is no use to the model. No feature set can be
+#     made study-free (scripts/analysis.py: study_leak.csv); this removes the incentive instead.
+# The random split gives the same models on the main task, for comparison.
+name: novelty
+grid:
+  universe: [string, reactome_fi, huri]
+  graph: [string, reactome_fi, huri]
+  copy: [real, rw0, empty]
+  labels: [minikel]
+  feats: [all, attn_free]
+  split: [random, time]
+  seed: [0, 1, 2, 3, 4]
+  model: [deg_lr, rf_struct, labelprop, mlp_feat, rf_feat, sign_feat, cs_feat, gcn_feat, gat_feat, gp]
+  loss: [nnpu, pn, pn_pubmed]

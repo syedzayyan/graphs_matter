@@ -61,3 +61,11 @@ def pharos_tdl() -> pd.Series:
     d = pd.read_csv(ids.RAW / "pharos_targets.tsv", sep="\t")
     d["ensg"] = ids.map_uniprot(d.uniprot).fillna(ids.map_symbols(d.sym))
     return d.dropna(subset=["ensg"]).drop_duplicates("ensg").set_index("ensg").tdl
+
+
+def target_first_approval() -> pd.Series:
+    """ENSG -> year the first approved drug acting on it was approved (ChEMBL mechanisms of
+    action; fetch.py: chembl_approvals.tsv). Genes absent have no approved drug in ChEMBL."""
+    d = pd.read_csv(ids.RAW / "chembl_approvals.tsv", sep="\t")
+    d["ensg"] = ids.map_uniprot(d.uniprot)
+    return d.dropna(subset=["ensg"]).groupby("ensg").first_approval.min()

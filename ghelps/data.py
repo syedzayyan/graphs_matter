@@ -37,6 +37,13 @@ FEATURE_SETS = {"all": FEATURE_BLOCKS, "no_tract": ("go", "pfam", "pathway"),
                 # attention-free: no GO / pathways / literature / curated structures; uniform
                 # per gene (ESM-2 embeddings, sequence-derived features, GTEx expression)
                 "attn_free": ("esm", "seqfeat", "gtex")}
+# Study-residualised variants: every feature column replaced by its rank among genes with a
+# similar PubMed count (50 equal-size bins), so each column has the same distribution at every
+# level of study. Label-free. Diagnostic only (scripts/analysis.py: study_leak.csv): an RF
+# still predicts log PubMed from them (STRING Spearman: attn_free 0.60 -> 0.53, all 0.79 ->
+# 0.89), because study is concentrated in particular families and annotation patterns, which
+# no per-column correction removes. Experiments remove the *incentive* instead (pn_pubmed).
+FEATURE_SETS |= {f"{k}_resid": FEATURE_SETS[k] for k in ("all", "attn_free")}
 SVD_DIM = 256
 GP_BLOCK_DIM = 32
 GP_TOPO_DIM = 16
@@ -112,9 +119,30 @@ def pubmed_counts(universe: str) -> np.ndarray:
     return pd.read_parquet(P / "features" / universe / "pubmed.parquet").loc[genes_of(universe)].pubmed_count.values
 
 
+def _resid(universe: str, x: np.ndarray, bins: int = 50) -> np.ndarray:
+    """Each column -> normal scores of its rank within the gene's PubMed-count bin (ties
+    broken at random, seeded)."""
+    from scipy.stats import norm
+    pm = pubmed_counts(universe)
+    rng = np.random.default_rng(0)
+    b = pd.qcut(pd.Series(pm).rank(method="first"), bins, labels=False).values
+    out = np.empty(x.shape, np.float32)
+    for k in range(bins):
+        m = rng.permutation(np.flatnonzero(b == k))
+        r = np.argsort(np.argsort(x[m], axis=0, kind="stable"), axis=0)
+        out[m] = norm.ppf((r + 0.5) / len(m))
+    return out
+
+
+def _block(universe: str, blocks, dim: int, tag: str, feats: str) -> np.ndarray:
+    """SVD features of `blocks` (cached under `tag`), residualised for the *_resid sets."""
+    x = _svd(universe, blocks, dim, tag)
+    return _resid(universe, x) if feats.endswith("_resid") else x
+
+
 @lru_cache(maxsize=8)
 def features(universe: str, feats: str = "all") -> np.ndarray:
-    return _svd(universe, FEATURE_SETS[feats], SVD_DIM, feats)
+    return _block(universe, FEATURE_SETS[feats], SVD_DIM, feats.removesuffix("_resid"), feats)
 
 
 def _edges(universe: str, graph: str, copy: str) -> tuple[np.ndarray, np.ndarray]:
@@ -144,6 +172,10 @@ def load(universe: str, graph: str | None, copy: str, labels: str, split: str, s
     sdir = P / "splits" / universe / labels / split
     s = pd.read_parquet(sdir / f"seed{seed}.parquet")
     neg = pd.read_parquet(sdir / f"seed{seed}.neg.parquet")
+    # a split with a cut-off date (time) ships the PubMed counts known at the cut-off, so
+    # study-matched training negatives (pn_pubmed) don't use later papers
+    pm = pd.read_parquet(sdir / "pubmed.parquet").loc[genes].pubmed_count.values \
+        if (sdir / "pubmed.parquet").exists() else pubmed_counts(universe)
     ei = ea = st = deg = None
     if graph is not None:
         e, a = _edges(universe, graph, copy)
@@ -151,14 +183,14 @@ def load(universe: str, graph: str | None, copy: str, labels: str, split: str, s
                                num_nodes=len(genes))
         st, deg = _struct(universe, graph, copy)
     return Problem(universe, graph, copy, feats, genes, s.y.values, s.fold.values, ei, ea, st, deg,
-                   features(universe, feats), neg, pubmed_counts(universe))
+                   features(universe, feats), neg, pm)
 
 
 def gp_inputs(p: Problem) -> tuple[np.ndarray, dict[str, list[int]]]:
     """Column blocks for the additive GP: own feature blocks (per-block SVD), log-degree,
     topology (Laplacian eigenvectors, PyG transform) and 2-hop neighbour features (SIGN)."""
     from ghelps.models import sign_features
-    parts = {b: _svd(p.universe, (b,), GP_BLOCK_DIM, b) for b in FEATURE_SETS[p.feats]}
+    parts = {b: _block(p.universe, (b,), GP_BLOCK_DIM, b, p.feats) for b in FEATURE_SETS[p.feats]}
     own = np.hstack(list(parts.values()))
     parts["degree"] = _z(np.log1p(p.raw_degree)[:, None]).astype(np.float32)
     cache = P / "structure" / p.universe / f"lappe{GP_TOPO_DIM}_{p.graph}.{p.copy}.npy"
