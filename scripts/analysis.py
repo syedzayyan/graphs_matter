@@ -21,6 +21,8 @@ prior_study.csv   was study intensity there *before* approval? For Minikel >= Ph
                   date). Papers are dated by PMID via a monotone fit through PubMed entry dates
                   (fetch.py: pmid_years.tsv). Minikel's year_launch is not used: it dates the
                   launch of one indication, often decades after the target was first drugged.
+label_bias.csv    how study-biased is each label? Positives, and AUROC of PubMed count (now, and
+                  before the time-split cut-off) for separating them from all other genes.
 study_leak.csv    how much study intensity does each feature set carry? Out-of-fold RF
                   prediction of log PubMed count from the features: Spearman(prediction, log
                   PubMed). Includes the residualised sets (ghelps/data.py: *_resid).
@@ -45,7 +47,8 @@ time_novelty.csv  time split (results/novelty, split "time"): trained on targets
                   "novel" (not top-decile study, new family, >= 2 hops). Per stratum: AUROC vs
                   all test unlabelled genes, and recall in the top 10% of the test ranking.
                   Reference rankers: PubMed before 2010, PubMed now (leaks the future), number
-                  of known targets sharing a Pfam domain, and closeness to known targets.
+                  of known targets sharing a Pfam domain, and closeness to known targets. Runs
+                  trained on the genetic label (same folds and test genes) appear with labels=genetic.
 topk_audit and phase_ladder need results/main, time_novelty results/novelty (the summarise
 job runs this after collecting them).
 
@@ -251,6 +254,27 @@ def study_leak(universe: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------------------
+# How study-biased is each label itself?
+
+def label_bias(universe: str, genes: list[str], cum: pd.DataFrame, pos_all: set, membrane: set) -> list[dict]:
+    T = CFG["splits"]["time_split_year"]
+    pm_now = data.pubmed_counts(universe).astype(float)
+    pm_T = cum.reindex(genes, fill_value=0)[T - 1].values.astype(float)
+    first = labels.target_first_approval()
+    sets = {"minikel (>= Phase III)": pos_all,
+            f"drugged before {T}": set(first[first < T].index) & pos_all,
+            f"genetic evidence before {T}": labels.genetic(before=T),
+            "genetic evidence (any date)": labels.genetic(),
+            "membrane": membrane}
+    rows = []
+    for name, s in sets.items():
+        y = np.array([g in s for g in genes], dtype=int)
+        rows.append(dict(universe=universe, label=name, positives=int(y.sum()), frac=y.mean(),
+                         pubmed_auroc_now=auc(y, pm_now), pubmed_auroc_before_T=auc(y, pm_T),
+                         median_pubmed_pct=np.median((rankdata(pm_now) / len(pm_now))[y == 1])))
+    return rows
+
+# ---------------------------------------------------------------------------------------
 # Time split: are future targets found, and which ones?
 
 NOVELTY_EXP, NOVELTY_RECALL_FRAC = "novelty", 0.10
@@ -264,6 +288,8 @@ def time_novelty(universe: str, genes: list[str], graph: str, cum: pd.DataFrame,
     runs = pd.read_csv(f, usecols=["run_id", *AXES]).drop_duplicates("run_id")
     runs["copy"] = runs["copy"].fillna("none")
     runs = runs[(runs.universe == universe) & (runs.split == "time") & runs["copy"].isin(["real", "empty", "none"])]
+    # strata are defined by drug history (the minikel time split), whichever label a run trained on;
+    # every label's time split shares those folds and test genes
     if runs.empty:
         return []
     T = CFG["splits"]["time_split_year"]
@@ -292,11 +318,12 @@ def time_novelty(universe: str, genes: list[str], graph: str, cum: pd.DataFrame,
         refs = {"pubmed_before_T": pm_T, "pubmed_now": pm_now,
                 "known_family_count": fam_known + 1e-3 * rankdata(pm_T),  # PubMed breaks ties
                 "closeness_to_known": -np.minimum(hops, 50) + 1e-3 * rankdata(pm_T) / len(pm_T)}
-        scored = [(dict(copy="none", feats="-", model=k, loss="-"), v) for k, v in refs.items()]
+        scored = [(dict(labels="-", copy="none", feats="-", model=k, loss="-"), v) for k, v in refs.items()]
         for r in rs.itertuples():
             sf = ROOT / "results" / NOVELTY_EXP / "scores" / f"{r.run_id}.npy"
             if sf.exists():
-                scored.append((dict(copy=r.copy, feats=r.feats, model=r.model, loss=r.loss), np.load(sf).astype(float)))
+                scored.append((dict(labels=r.labels, copy=r.copy, feats=r.feats, model=r.model, loss=r.loss),
+                               np.load(sf).astype(float)))
         for key, s in scored:
             st = s[test]
             top = st >= np.quantile(st, 1 - NOVELTY_RECALL_FRAC)
@@ -306,7 +333,8 @@ def time_novelty(universe: str, genes: list[str], graph: str, cum: pd.DataFrame,
                 rows.append(dict(universe=universe, graph=graph, seed=seed, **key, stratum=name, n_future=n,
                                  auroc=auc(fut[sel].astype(int), st[sel]) if n else np.nan,
                                  recall_top10pct=top[fut & m].mean() if n else np.nan))
-    return (pd.DataFrame(rows).groupby(["universe", "graph", "copy", "feats", "model", "loss", "stratum"], sort=False)
+    return (pd.DataFrame(rows).groupby(["universe", "graph", "labels", "copy", "feats", "model", "loss", "stratum"],
+                                       sort=False)
             .mean(numeric_only=True).drop(columns="seed").reset_index().to_dict("records"))
 
 
@@ -314,7 +342,7 @@ def main():
     ensure.ensure_data()  # fetches any raw source added since the data was built (e.g. pmid_years.tsv)
     pos_all = labels.minikel(CFG["labels"]["minikel_min_phase"])
     membrane = labels.membrane()
-    sizes, hubs, mem, med, prior, audit, ladder, leak, novelty = [], [], [], [], [], [], [], [], []
+    sizes, hubs, mem, med, prior, audit, ladder, leak, novelty, lbias = [], [], [], [], [], [], [], [], [], []
     phase = labels.minikel_best_phase()
     first_drugged = labels.target_first_approval()
     launch = first_drugged[first_drugged.index.isin(pos_all)]
@@ -326,6 +354,7 @@ def main():
         pm = data.pubmed_counts(universe)
         prior += prior_study(universe, genes, cum, launch, phase)
         leak += study_leak(universe)
+        lbias += label_bias(universe, genes, cum, pos_all, membrane)
         lpm = np.log1p(pm)
         quint = pd.qcut(pd.Series(lpm).rank(method="first"), 5, labels=False).values
         for graph in members:
@@ -360,7 +389,7 @@ def main():
             ladder += l
             novelty += time_novelty(universe, genes, graph, cum, first_drugged)
     for name, rows in (("graph_sizes", sizes), ("hub_bias", hubs), ("membrane", mem), ("mediation", med),
-                       ("prior_study", prior), ("study_leak", leak), ("topk_audit", audit),
+                       ("prior_study", prior), ("study_leak", leak), ("label_bias", lbias), ("topk_audit", audit),
                        ("phase_ladder", ladder), ("time_novelty", novelty)):
         if not rows:
             continue

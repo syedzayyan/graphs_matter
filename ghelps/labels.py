@@ -69,3 +69,14 @@ def target_first_approval() -> pd.Series:
     d = pd.read_csv(ids.RAW / "chembl_approvals.tsv", sep="\t")
     d["ensg"] = ids.map_uniprot(d.uniprot)
     return d.dropna(subset=["ensg"]).groupby("ensg").first_approval.min()
+
+
+def genetic(before: int | None = None) -> set[str]:
+    """Genes with human genetic evidence for any disease (Open Targets: fine-mapped GWAS with
+    locus-to-gene >= 0.8, exome burden, ClinVar, Gene2Phenotype, ClinGen, Orphanet, Genomics
+    England, UniProt; thresholds in fetch.GENETIC_SOURCES). `before`: only evidence published
+    before that year (undated evidence is left out)."""
+    d = pd.read_csv(ids.RAW / "genetic_evidence.tsv", sep="\t")
+    if before is not None:
+        d = d[d.year < before]
+    return set(d.ensg)

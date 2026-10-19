@@ -7,6 +7,7 @@ Output: data/processed/splits/<universe>/<labelset>/
   <split>/seed<s>.neg.parquet      regime, pos, neg  (node indices; -1 = "all")
   time/pubmed.parquet              PubMed counts before the time split's cut-off year
 Splits: random, pfam, community, rcnt, pharos, wave_<w>, time (the last four Minikel only).
+genetic/time/: the Minikel time split's folds and test set, trained on genes with genetic evidence before the cut-off.
   summary.tsv
 """
 import sys
@@ -31,6 +32,7 @@ MINIKEL_ONLY_SPLITS = {"rcnt", "pharos", "time"} | {f"wave_{w}" for w in sc["wav
 first_launch = labels.minikel_first_launch()
 tdl = labels.pharos_tdl()
 first_approval = labels.target_first_approval()
+genetic_before_T = labels.genetic(before=sc["time_split_year"])
 T = sc["time_split_year"]
 pubmed_years = features.pubmed_by_year()
 
@@ -75,6 +77,7 @@ for uname, members in cfg["universes"].items():
         chem = (t == "Tchem") & (y == 0)
         clin = (t == "Tclin") & (y == 0)
 
+        genetic_split = {}
         for seed in range(sc["n_seeds"]):
             made = {
                 "random": (splits.random_split(genes, y, seed), None),
@@ -104,17 +107,34 @@ for uname, members in cfg["universes"].items():
                                                            exclude_unl=undated), undated)
             if lname != "minikel":
                 made = {k: v for k, v in made.items() if k not in MINIKEL_ONLY_SPLITS}
+            else:
+                # genetic label on the time split: the same folds and test set (targets first
+                # drugged from T on vs the same unlabelled genes), but trained on genes with human
+                # genetic evidence published before T instead of on targets drugged before T.
+                # Both labels can then be compared gene for gene on the future targets.
+                tdf, tex = made["time"]
+                gdf = tdf.copy()
+                train_side = gdf.fold.isin(["train", "val"]).values
+                g = np.array([x in genetic_before_T for x in genes])
+                gdf.loc[train_side, "y"] = g[train_side].astype(np.int8)
+                gdir = P / "splits" / uname / "genetic" / "time"
+                gdir.mkdir(parents=True, exist_ok=True)
+                gdf.to_parquet(gdir / f"seed{seed}.parquet")
+                genetic_split[seed] = gdir
             for sname, (df, excl) in made.items():
                 d = out / sname
                 d.mkdir(exist_ok=True)
                 if sname == "time" and seed == 0:  # study as known at the cut-off (data.load)
-                    pd.DataFrame({"pubmed_count": pubmed_T}, index=pd.Index(genes, name="ensg")) \
-                        .to_parquet(d / "pubmed.parquet")
+                    for dd in (d, *(genetic_split.values())):
+                        pd.DataFrame({"pubmed_count": pubmed_T}, index=pd.Index(genes, name="ensg")) \
+                            .to_parquet(dd / "pubmed.parquet")
                 df.to_parquet(d / f"seed{seed}.parquet")
                 # time split: study-matched negatives use what was known at the cut-off
                 neg = splits.negatives(df, a_union, pfam.values, pw.values, sc["neg_per_pos"], seed, excl,
                                        pubmed=pubmed_T if sname == "time" else pubmed)
                 neg.to_parquet(d / f"seed{seed}.neg.parquet")
+                if sname == "time" and seed in genetic_split:  # identical test set and negatives
+                    neg.to_parquet(genetic_split[seed] / f"seed{seed}.neg.parquet")
                 fc = df.groupby(["fold", "y"]).size()
                 row = {"universe": uname, "labels": lname, "split": sname, "seed": seed,
                        **{f"{f}_{c}": int(fc.get((f, c), 0)) for f in ("train", "val", "test") for c in (1, 0)}}

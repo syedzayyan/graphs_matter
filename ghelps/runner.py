@@ -105,7 +105,8 @@ def execute(r: dict, out: Path) -> str:
     from ghelps import data, device, evaluate, train
 
     rid = run_id(r)
-    if (out / "runs" / f"{rid}.json").exists():
+    # finished = record *and* scores: a run whose score file went missing is redone
+    if (out / "runs" / f"{rid}.json").exists() and (out / "scores" / f"{rid}.npy").exists():
         return f"skip {rid}"
     t0 = time.time()
     try:

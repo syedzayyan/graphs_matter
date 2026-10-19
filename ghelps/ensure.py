@@ -53,7 +53,8 @@ def _done(step: str) -> bool:
         return (P / "splits" / "summary.tsv").exists() and all(
             (P / "splits" / n / ls / "random" / f"seed{sc['n_seeds'] - 1}.neg.parquet").exists()
             for n in u for ls in sc["label_sets"]) and all(
-            (P / "splits" / n / "minikel" / "time" / f"seed{sc['n_seeds'] - 1}.neg.parquet").exists() for n in u)
+            (P / "splits" / n / ls / "time" / f"seed{sc['n_seeds'] - 1}.neg.parquet").exists()
+            for n in u for ls in ("minikel", "genetic"))
     raise ValueError(step)
 
 

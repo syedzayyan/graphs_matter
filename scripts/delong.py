@@ -8,7 +8,9 @@ DeLong's test applies. Per (universe, graph, labels, feats, split, loss, model, 
 contrast) it reports:
   delta_auroc     mean over seeds of AUROC(real) - AUROC(control)
   z_seeds         per-seed DeLong z (positive = real better); for "rewired" the z against
-                  each rewired copy is averaged within the seed
+                  each rewired copy is averaged within the seed; "vs_minikel_label" compares a
+                  run trained on another label set with its Minikel twin (positive = the other
+                  label better) on the test genes both share (genetic/time)
   stouffer_z, p   seeds combined with Stouffer's method (two-sided p)
   p_bh            Benjamini-Hochberg adjusted within the experiment
 Test genes per regime are those evaluate.by_regime scores (random: all test positives vs all
@@ -102,6 +104,15 @@ def run(exp: str) -> pd.DataFrame:
             controls[f"vs_{BASELINE}"] = [base.loc[bkey]]
         controls = {c: rids for c, rids in controls.items() if rids}
         tasks.append((exp, {k: r[k] for k in KEYS}, r.run_id, controls, (r.universe, r.labels, r.split, int(r.seed))))
+    # label contrast: the same model / graph condition / split / seed trained on another label
+    # set than Minikel, where that label's split shares Minikel's test genes (genetic/time)
+    twin_keys = ["universe", "graph", "copy", "feats", "split", "seed", "model", "loss"]
+    mk = df[df.labels == "minikel"].fillna({"graph": "-"}).set_index(twin_keys).run_id
+    for _, r in df[(df.labels != "minikel") & df["copy"].isin(["real", "none"])].fillna({"graph": "-"}).iterrows():
+        twin = tuple(r[k] for k in twin_keys)
+        if twin in mk.index:
+            tasks.append((exp, {k: r[k] for k in KEYS}, r.run_id, {"vs_minikel_label": [mk.loc[twin]]},
+                          (r.universe, r.labels, r.split, int(r.seed))))
     workers = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count() or 1))
     with ProcessPoolExecutor(workers) as ex:
         rows = [row for rs in ex.map(_compare, tasks, chunksize=16) for row in rs]

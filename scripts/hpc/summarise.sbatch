@@ -21,7 +21,9 @@ done
 uv run python scripts/analysis.py
 # All figure sets per graph and experiment, plus the druggability-vs-membrane comparison. Runs here (not on a laptop) because figure 5 needs the
 # gene-level degrees and splits in $GHELPS_DATA that these runs were computed on.
-uv run python scripts/figures.py --exps "$@"
+uv run python scripts/figures.py --exps "$@" || echo "figures.py failed; continuing with DeLong" >&2
 # Paired DeLong tests (real vs each control, graph model vs no-graph RF), BH-corrected. Slowest
 # step, so last: everything above is already written if it runs out of time.
 uv run python scripts/delong.py "$@"
+# summary.md: every table filled into scripts/report_template.md
+uv run python scripts/report.py

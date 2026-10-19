@@ -119,6 +119,44 @@ def _chembl_approvals(dest: Path) -> None:
         .to_csv(dest, sep="\t", index=False)
 
 
+# Human genetic evidence (Open Targets) kept for the genetic label, with the threshold each
+# source must pass. GWAS: fine-mapped credible sets whose locus-to-gene score is >= 0.8; gene
+# burden: exome-wide significant (p < 2.5e-6); Mendelian sources: their own top confidence
+# tiers; ClinVar (EVA): OT score >= 0.8 (pathogenic, reviewed).
+GENETIC_SOURCES = {
+    "evidence_gwas_credible_sets": lambda d: d.score >= 0.8,
+    "evidence_gene_burden": lambda d: d.pValueMantissa * 10.0 ** d.pValueExponent < 2.5e-6,
+    "evidence_eva": lambda d: d.score >= 0.8,
+    "evidence_gene2phenotype": lambda d: d.confidence.isin(["definitive", "strong"]),
+    "evidence_clingen": lambda d: d.confidence.isin(["Definitive", "Strong"]),
+    "evidence_orphanet": lambda d: d.score >= 0,
+    "evidence_genomics_england": lambda d: d.confidence == "green",
+    "evidence_uniprot_variants": lambda d: d.confidence == "high",
+    "evidence_uniprot_literature": lambda d: d.confidence == "high",
+}
+
+
+def _genetic_evidence(dest: Path) -> None:
+    """Gene x source -> earliest year of qualifying human genetic evidence (publication date,
+    else evidence date; NaN if undated). Streams each Open Targets dataset, keeps only the
+    rows that pass GENETIC_SOURCES, then deletes the download."""
+    rows = []
+    for name, keep in GENETIC_SOURCES.items():
+        tmp = dest.parent / f"{name}.part"
+        shutil.rmtree(tmp, ignore_errors=True)
+        _ot_dataset(name)(tmp)
+        for f in sorted(tmp.glob("*.parquet")):
+            d = pd.read_parquet(f)
+            d = d[keep(d)]
+            date = d.publicationDate if "publicationDate" in d else d.evidenceDate
+            year = pd.to_numeric(date.fillna(d.get("evidenceDate", date)).astype(str).str[:4], errors="coerce")
+            rows.append(pd.DataFrame({"ensg": d.targetId.values, "source": name.removeprefix("evidence_"),
+                                      "year": year.values}))
+        shutil.rmtree(tmp)
+    out = pd.concat(rows).groupby(["ensg", "source"], dropna=False).year.min().reset_index()
+    out.to_csv(dest, sep="\t", index=False)
+
+
 def url(u: str):
     return lambda dest: _download(u, dest)
 
@@ -178,6 +216,7 @@ SOURCES: dict[str, callable] = {
     "gene2pubmed.gz": url("https://ftp.ncbi.nlm.nih.gov/gene/DATA/gene2pubmed.gz"),
     "pmid_years.tsv": _pmid_years,  # dates gene2pubmed papers (study-before-launch analysis)
     "chembl_approvals.tsv": _chembl_approvals,  # dates when each target was first drugged (time split)
+    "genetic_evidence.tsv": _genetic_evidence,  # human genetic evidence per gene (genetic label)
     "goa_human.gaf.gz": url("https://current.geneontology.org/annotations/goa_human.gaf.gz"),
     "ensembl2reactome.txt": url("https://reactome.org/download/current/Ensembl2Reactome_All_Levels.txt"),
     "uniprot_human.tsv.gz": url("https://rest.uniprot.org/uniprotkb/stream?query=organism_id:9606+AND+reviewed:true"

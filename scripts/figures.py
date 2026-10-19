@@ -265,8 +265,9 @@ def fig_degree(df: pd.DataFrame, exp: str, universe: str, graph: str, out: Path)
     models = [m for m in ("rf_feat", "gp", "gcn_feat", "sage_feat", "gat_feat", "labelprop") if m in set(df.model)]
     colors = ["#8a8984", "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]
     deg = data._struct(universe, graph, "real")[1]
-    probe = sel(df, model=models[0]).run_id.iloc[0]
-    n_scores = len(np.load(RES / exp / "scores" / f"{probe}.npy"))
+    probe = next(f for rid in sel(df, model=models[0]).run_id
+                 if (f := RES / exp / "scores" / f"{rid}.npy").exists())
+    n_scores = len(np.load(probe))
     if n_scores != len(deg):
         print(f"  skip 5_degree for {graph}: scores cover {n_scores} genes but the local {universe} universe has "
               f"{len(deg)} -- point GHELPS_DATA at the processed data the runs used", flush=True)
@@ -284,9 +285,10 @@ def fig_degree(df: pd.DataFrame, exp: str, universe: str, graph: str, out: Path)
         for m in models:
             r = runs[(runs.model == m) & (runs.seed == seed) & (runs.graph.isin([graph, "-"]))
                      & (runs["copy"].isin(["real", "none"]))]
-            if r.empty:
+            f = RES / exp / "scores" / f"{r.run_id.iloc[0]}.npy"
+            if r.empty or not f.exists():
                 continue
-            sc = np.load(RES / exp / "scores" / f"{r.run_id.iloc[0]}.npy")[te]
+            sc = np.load(f)[te]
             pct = pd.Series(sc).rank(pct=True).values
             score_rows.append(pd.DataFrame({"decile": dec, "pct": pct, "model": m}))
     pos = pd.concat(pos_rows).groupby("decile").y.mean()
@@ -360,7 +362,8 @@ def fig_compare(effects: dict[str, pd.DataFrame], out: Path):
 def main():
     global FEATS
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exps", nargs="+", default=["main", "waves", "membrane", "nonsense_labels", "nonsense_feats"])
+    ap.add_argument("--exps", nargs="+", default=["main", "waves", "membrane", "nonsense_labels", "nonsense_feats",
+                                                  "novelty"])
     a = ap.parse_args()
     style()
     effects = {}
@@ -372,9 +375,12 @@ def main():
         feats = set(df.feats)
         FEATS = "all" if "all" in feats else sorted(feats)[0]
         effects[exp] = per_seed(df[df.feats == FEATS])
-        label_sets = sorted(df.labels.unique())  # e.g. nonsense_labels: fully vs within-family shuffled
+        # e.g. nonsense_labels: fully vs within-family shuffled; label sets without a random split skipped
+        label_sets = sorted(l for l in df.labels.unique() if "random" in set(df[df.labels == l].split))
         for lab, universe in [(lab, u) for lab in label_sets for u in sorted(df.universe.unique())]:
             du = df[(df.universe == universe) & (df.labels == lab)]
+            if "random" not in set(du.split):  # e.g. the genetic label exists only on the time split
+                continue
             ps = per_seed(du)
             for graph in [g for g in du.graph.unique() if g != "-"]:
                 out = OUT / exp / (lab if len(label_sets) > 1 else "") / graph

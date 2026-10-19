@@ -6,13 +6,16 @@
 #   pn_pubmed: training negatives matched to the positives on PubMed count (as known in 2010
 #     for the time split), so study intensity is no use to the model. No feature set can be
 #     made study-free (scripts/analysis.py: study_leak.csv); this removes the incentive instead.
+#   genetic label: same time split, but trained on genes with human genetic evidence published
+#     before 2010 instead of targets drugged before 2010. Does a label that doesn't encode drug
+#     history find the *novel* future targets better? (time_novelty.csv, delong vs_minikel_label)
 # The random split gives the same models on the main task, for comparison.
 name: novelty
 grid:
   universe: [string, reactome_fi, huri]
   graph: [string, reactome_fi, huri]
   copy: [real, rw0, empty]
-  labels: [minikel]
+  labels: [minikel, genetic]   # genetic: time split only (same folds and test set as minikel)
   feats: [all, attn_free]
   split: [random, time]
   seed: [0, 1, 2, 3, 4]
