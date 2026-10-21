@@ -6,6 +6,9 @@
 #   pn_pubmed: training negatives matched to the positives on PubMed count (as known in 2010
 #     for the time split), so study intensity is no use to the model. No feature set can be
 #     made study-free (scripts/analysis.py: study_leak.csv); this removes the incentive instead.
+#   dated features: only what was known before 2010 (attention-free blocks, Pfam, GO as of Dec
+#     2009, KEGG as of Sep 2009; ghelps/data.py). Rich features without hindsight: if the time
+#     split still favours rediscovery with them, it isn't because attn_free is just weak.
 #   genetic label: same time split, but trained on genes with human genetic evidence published
 #     before 2010 instead of targets drugged before 2010. Does a label that doesn't encode drug
 #     history find the *novel* future targets better? (time_novelty.csv, delong vs_minikel_label)
@@ -16,7 +19,7 @@ grid:
   graph: [string, reactome_fi, huri]
   copy: [real, rw0, empty]
   labels: [minikel, genetic]   # genetic: time split only (same folds and test set as minikel)
-  feats: [all, attn_free]
+  feats: [all, attn_free, dated]
   split: [random, time]
   seed: [0, 1, 2, 3, 4]
   model: [deg_lr, rf_struct, labelprop, mlp_feat, rf_feat, sign_feat, cs_feat, gcn_feat, gat_feat, gp]

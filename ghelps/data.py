@@ -44,6 +44,14 @@ FEATURE_SETS = {"all": FEATURE_BLOCKS, "no_tract": ("go", "pfam", "pathway"),
 # 0.89), because study is concentrated in particular families and annotation patterns, which
 # no per-column correction removes. Experiments remove the *incentive* instead (pn_pubmed).
 FEATURE_SETS |= {f"{k}_resid": FEATURE_SETS[k] for k in ("all", "attn_free")}
+# dated: only what could have been known before the time-split cut-off (2010). Attention-free
+# blocks, Pfam (sequence-derived), GO as annotated by Dec 2009 and KEGG pathways as of Sep 2009
+# (fetch.py). No tractability (it can't be dated) and no current GO / Reactome. For the time
+# split: are the time-split results down to weak features (attn_free), or to the label?
+FEATURE_SETS["dated"] = ("esm", "seqfeat", "gtex", "pfam", "go09", "kegg09")
+# Sets mixing z-scored continuous blocks with sparse binary ones get one SVD per group (half the
+# width each), so the continuous blocks' larger variance doesn't swamp the annotations.
+SVD_GROUPS = {"dated": (("esm", "seqfeat", "gtex"), ("pfam", "go09", "kegg09"))}
 SVD_DIM = 256
 GP_BLOCK_DIM = 32
 GP_TOPO_DIM = 16
@@ -142,6 +150,9 @@ def _block(universe: str, blocks, dim: int, tag: str, feats: str) -> np.ndarray:
 
 @lru_cache(maxsize=8)
 def features(universe: str, feats: str = "all") -> np.ndarray:
+    if feats in SVD_GROUPS:
+        return np.hstack([_svd(universe, g, SVD_DIM // len(SVD_GROUPS[feats]), f"{feats}{i}")
+                          for i, g in enumerate(SVD_GROUPS[feats])])
     return _block(universe, FEATURE_SETS[feats], SVD_DIM, feats.removesuffix("_resid"), feats)
 
 

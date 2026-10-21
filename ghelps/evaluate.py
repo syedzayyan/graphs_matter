@@ -34,6 +34,15 @@ def val_auprc(scores: np.ndarray, y: np.ndarray, fold: np.ndarray) -> float:
     return average_precision_score(y[m], scores[m])
 
 
+def train_auroc(scores: np.ndarray, y: np.ndarray, fold: np.ndarray) -> float:
+    """AUROC on the training fold (positives vs unlabelled): did the model fit at all? A run
+    near 0.5 here is a training failure, not a finding (scripts/report.py flags it)."""
+    m = fold == "train"
+    if y[m].sum() == 0 or y[m].sum() == m.sum():
+        return np.nan
+    return roc_auc_score(y[m], scores[m])
+
+
 def degree_dependence(scores: np.ndarray, degree: np.ndarray | None, mask: np.ndarray) -> dict:
     if degree is None:
         return {}

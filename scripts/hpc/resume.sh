@@ -7,7 +7,7 @@
 set -euo pipefail
 mkdir -p results/logs
 EXPS=("$@"); [ ${#EXPS[@]} -eq 0 ] && EXPS=(main waves membrane nonsense_labels nonsense_feats novelty)
-declare -A SHARDS=([main]=12 [waves]=3 [membrane]=2 [nonsense_labels]=1 [nonsense_feats]=1 [novelty]=3)
+declare -A SHARDS=([main]=12 [waves]=3 [membrane]=2 [nonsense_labels]=1 [nonsense_feats]=1 [novelty]=4)
 # fetch new raw sources and build missing processed data once, before any run job does it
 prep=$(sbatch --parsable scripts/hpc/prepare.sbatch)
 after="--dependency=afterok:${prep} --kill-on-invalid-dep=yes"; echo "prepare: ${prep}"

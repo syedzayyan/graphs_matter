@@ -237,7 +237,7 @@ def prediction_audits(universe: str, genes: list[str], graph: str, phase: pd.Ser
 # ---------------------------------------------------------------------------------------
 # How much study intensity each feature set carries
 
-LEAK_FEATS = ("all", "no_tract", "attn_free", "all_resid", "attn_free_resid")
+LEAK_FEATS = ("all", "no_tract", "attn_free", "dated", "all_resid", "attn_free_resid")
 
 
 def study_leak(universe: str) -> list[dict]:
@@ -246,7 +246,9 @@ def study_leak(universe: str) -> list[dict]:
     lpm = np.log1p(data.pubmed_counts(universe))
     rows = []
     for feats in LEAK_FEATS:
-        x = data.features(universe, feats)[:, :64]  # leading SVD components
+        x = data.features(universe, feats)
+        k = len(data.SVD_GROUPS.get(feats, ((),)))  # leading SVD components (of each group)
+        x = np.hstack([g[:, :64 // k] for g in np.hsplit(x, k)])
         pred = cross_val_predict(RandomForestRegressor(200, max_features=0.3, n_jobs=-1, random_state=0), x, lpm,
                                  cv=StratifiedKFold(3, shuffle=True, random_state=0).split(x, lpm > np.median(lpm)))
         rows.append(dict(universe=universe, feats=feats, rho_rf_pred_log_pubmed=spearmanr(pred, lpm).statistic))
@@ -277,47 +279,75 @@ def label_bias(universe: str, genes: list[str], cum: pd.DataFrame, pos_all: set,
 # ---------------------------------------------------------------------------------------
 # Time split: are future targets found, and which ones?
 
-NOVELTY_EXP, NOVELTY_RECALL_FRAC = "novelty", 0.10
+NOVELTY_EXP, NOVELTY_RECALL_FRAC, NOVELTY_BOOT = "novelty", 0.10, 2000
+NOVELTY_KEY = ["labels", "copy", "feats", "model", "loss"]
 
 
-def time_novelty(universe: str, genes: list[str], graph: str, cum: pd.DataFrame, first_drugged: pd.Series) -> list[dict]:
+def _novelty_strata(pct: np.ndarray, fam: np.ndarray, hop: np.ndarray) -> dict[str, np.ndarray]:
+    """Future targets by how novel they were at T: study then, Pfam family drugged then, hops
+    to the targets known then. "novel" needs all three; "novel (2 of 3)" any two (larger n)."""
+    crit = np.c_[pct < 0.9, ~fam, hop >= 2]
+    return {"all": np.ones(len(pct), bool),
+            "study<0.5": pct < 0.5, "study 0.5-0.9": (pct >= 0.5) & (pct < 0.9), "study>=0.9": pct >= 0.9,
+            "drugged family": fam, "new family": ~fam,
+            "1 hop": hop <= 1, "2 hops": hop == 2, "3+ hops": hop >= 3,
+            "novel": crit.all(1), "novel (2 of 3)": crit.sum(1) >= 2}
+
+
+def _future_context(universe: str, genes: list[str], graph: str, pm_T: np.ndarray):
+    """Positions of the future targets (test positives of the minikel time split), their strata,
+    and per gene the number of known targets sharing a Pfam domain and the hops to the nearest
+    one. Seed-independent: every seed tests all targets first drugged from T on, and the known
+    targets (first drugged before T) are the same."""
+    pct_T = rankdata(pm_T) / len(pm_T)
+    pfam = pd.read_parquet(paths.PROCESSED / "features" / universe / "pfam.parquet").reindex(genes, fill_value=0).values > 0
+    ei = np.load(paths.PROCESSED / "graphs" / universe / f"{graph}.real.npy")
+    adj = coo_matrix((np.ones(len(ei)), (ei[:, 0], ei[:, 1])), shape=(len(genes),) * 2).tocsr()
+    sp = pd.read_parquet(paths.PROCESSED / "splits" / universe / "minikel" / "time" / "seed0.parquet")
+    assert (sp.gene.values == np.array(genes)).all()
+    known = (sp.fold.values != "test") & (sp.fold.values != "excluded") & (sp.y.values == 1)
+    fam_known = pfam[:, pfam[known].any(0)].sum(1)
+    hops = dijkstra(adj, directed=False, unweighted=True, indices=np.flatnonzero(known), min_only=True)
+    fut = np.flatnonzero((sp.fold.values == "test") & (sp.y.values == 1))
+    strata = pd.DataFrame(_novelty_strata(pct_T[fut], fam_known[fut] > 0, hops[fut]))
+    return fut, strata.assign(gene=np.array(genes)[fut]), fam_known, hops
+
+
+def _wins(st: np.ndarray, fut: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per future target: share of test negatives ranked below it (ties 1/2; its stratum's AUROC
+    is the mean of these) and whether it is in the top 10% of the test ranking."""
+    neg = np.sort(st[~fut])
+    v = st[fut]
+    lo, hi = np.searchsorted(neg, v, "left"), np.searchsorted(neg, v, "right")
+    return (lo + 0.5 * (hi - lo)) / len(neg), v >= np.quantile(st, 1 - NOVELTY_RECALL_FRAC)
+
+
+def time_novelty_genes(universe: str, genes: list[str], graph: str, cum: pd.DataFrame) -> pd.DataFrame:
+    """One row per (run key, future target): win share and top-10% hit, averaged over seeds,
+    with the target's strata. Reference rankers have labels/copy/feats/loss "-"/"none"."""
     f = ROOT / "results" / NOVELTY_EXP / "results.csv"
     if not f.exists():
         print(f"skip time_novelty for {universe}: no results/{NOVELTY_EXP} runs", flush=True)
-        return []
+        return pd.DataFrame()
     runs = pd.read_csv(f, usecols=["run_id", *AXES]).drop_duplicates("run_id")
     runs["copy"] = runs["copy"].fillna("none")
     runs = runs[(runs.universe == universe) & (runs.split == "time") & runs["copy"].isin(["real", "empty", "none"])]
     # strata are defined by drug history (the minikel time split), whichever label a run trained on;
     # every label's time split shares those folds and test genes
     if runs.empty:
-        return []
+        return pd.DataFrame()
     T = CFG["splits"]["time_split_year"]
     pm_T = cum.reindex(genes, fill_value=0)[T - 1].values.astype(float)
-    pct_T = rankdata(pm_T) / len(pm_T)
-    pm_now = data.pubmed_counts(universe).astype(float)
-    pfam = pd.read_parquet(paths.PROCESSED / "features" / universe / "pfam.parquet").reindex(genes, fill_value=0).values > 0
-    ei = np.load(paths.PROCESSED / "graphs" / universe / f"{graph}.real.npy")
-    adj = coo_matrix((np.ones(len(ei)), (ei[:, 0], ei[:, 1])), shape=(len(genes),) * 2).tocsr()
-    rows = []
+    fut_idx, strata, fam_known, hops = _future_context(universe, genes, graph, pm_T)
+    refs = {"pubmed_before_T": pm_T, "pubmed_now": data.pubmed_counts(universe).astype(float),
+            "known_family_count": fam_known + 1e-3 * rankdata(pm_T),  # PubMed breaks ties
+            "closeness_to_known": -np.minimum(hops, 50) + 1e-3 * rankdata(pm_T) / len(pm_T)}
+    out = []
     for seed, rs in runs.groupby("seed"):
         sp = pd.read_parquet(paths.PROCESSED / "splits" / universe / "minikel" / "time" / f"seed{seed}.parquet")
-        assert (sp.gene.values == np.array(genes)).all()
-        y, fold = sp.y.values, sp.fold.values
-        test = np.flatnonzero(fold == "test")
-        known = (fold != "test") & (fold != "excluded") & (y == 1)  # first drugged before T
-        fam_known = pfam[:, pfam[known].any(0)].sum(1)               # known targets' domains shared
-        hops = dijkstra(adj, directed=False, unweighted=True, indices=np.flatnonzero(known), min_only=True)
-        fut = y[test] == 1
-        t_pct, t_fam, t_hop = pct_T[test], fam_known[test] > 0, hops[test]
-        strata = {"all": np.ones(len(test), bool),
-                  "study<0.5": t_pct < 0.5, "study 0.5-0.9": (t_pct >= 0.5) & (t_pct < 0.9), "study>=0.9": t_pct >= 0.9,
-                  "drugged family": t_fam, "new family": ~t_fam,
-                  "1 hop": t_hop <= 1, "2 hops": t_hop == 2, "3+ hops": t_hop >= 3,
-                  "novel": (t_pct < 0.9) & ~t_fam & (t_hop >= 2)}
-        refs = {"pubmed_before_T": pm_T, "pubmed_now": pm_now,
-                "known_family_count": fam_known + 1e-3 * rankdata(pm_T),  # PubMed breaks ties
-                "closeness_to_known": -np.minimum(hops, 50) + 1e-3 * rankdata(pm_T) / len(pm_T)}
+        test = np.flatnonzero(sp.fold.values == "test")
+        fut = sp.y.values[test] == 1
+        assert (test[fut] == fut_idx).all(), "future targets differ between seeds"
         scored = [(dict(labels="-", copy="none", feats="-", model=k, loss="-"), v) for k, v in refs.items()]
         for r in rs.itertuples():
             sf = ROOT / "results" / NOVELTY_EXP / "scores" / f"{r.run_id}.npy"
@@ -325,24 +355,127 @@ def time_novelty(universe: str, genes: list[str], graph: str, cum: pd.DataFrame,
                 scored.append((dict(labels=r.labels, copy=r.copy, feats=r.feats, model=r.model, loss=r.loss),
                                np.load(sf).astype(float)))
         for key, s in scored:
-            st = s[test]
-            top = st >= np.quantile(st, 1 - NOVELTY_RECALL_FRAC)
-            for name, m in strata.items():
-                sel = (fut & m) | ~fut                             # this stratum's positives vs all negatives
-                n = int((fut & m).sum())
-                rows.append(dict(universe=universe, graph=graph, seed=seed, **key, stratum=name, n_future=n,
-                                 auroc=auc(fut[sel].astype(int), st[sel]) if n else np.nan,
-                                 recall_top10pct=top[fut & m].mean() if n else np.nan))
-    return (pd.DataFrame(rows).groupby(["universe", "graph", "labels", "copy", "feats", "model", "loss", "stratum"],
-                                       sort=False)
-            .mean(numeric_only=True).drop(columns="seed").reset_index().to_dict("records"))
+            win, hit = _wins(s[test], fut)
+            rho = spearmanr(s[test], pm_T[test]).statistic  # how much the ranking follows study at T
+            out.append(pd.DataFrame({**key, "seed": seed, "pos": np.arange(len(fut_idx)), "win": win, "hit": hit,
+                                     "rho_pubmed_T": rho}))
+    g = (pd.concat(out).groupby(NOVELTY_KEY + ["pos"], sort=False)[["win", "hit", "rho_pubmed_T"]].mean()
+         .reset_index())
+    return g.merge(strata.reset_index(names="pos"), on="pos").drop(columns="pos").assign(universe=universe, graph=graph)
+
+
+def _boot_means(v: np.ndarray, cluster: np.ndarray, counts: np.ndarray) -> np.ndarray:
+    """Bootstrap means of v resampling clusters (genes): counts is (B, n_clusters) multinomial."""
+    s = np.bincount(cluster, weights=v, minlength=counts.shape[1])
+    n = np.bincount(cluster, minlength=counts.shape[1])
+    return (counts @ s) / np.maximum(counts @ n, 1)
+
+
+def time_novelty(gene_rows: pd.DataFrame, pooled: bool = False) -> list[dict]:
+    """Per (universe, run key, stratum): AUROC and recall@10% over the stratum's future targets,
+    95% bootstrap CIs resampling those targets (2000 draws, shared across run keys so CIs are
+    paired), the paired difference from the PubMed-before-T ranker with its CI, and for runs
+    trained on another label the paired difference from their Minikel-trained twin (same copy,
+    features, model, loss; *_vs_minikel). rho_pubmed_T: Spearman(score, PubMed before T) over
+    the test genes, mean over seeds. The CI
+    covers which targets happened to come up after T, the dominant uncertainty for strata of
+    7-30 genes; negatives (thousands of genes) are held fixed. pooled=True pools the three
+    graphs (keys present in all three), resampling genes so one gene in several graphs counts
+    as one cluster."""
+    if gene_rows.empty:
+        return []
+    rng = np.random.default_rng(0)
+    rows = []
+    groups = [("pooled", gene_rows)] if pooled else list(gene_rows.groupby("universe", sort=False))
+    for universe, d in groups:
+        if pooled:
+            n_u = d.groupby(NOVELTY_KEY).universe.transform("nunique")
+            d = d[n_u == d.universe.nunique()]
+        strata = list(_novelty_strata(np.zeros(1), np.zeros(1, bool), np.zeros(1)))
+        ref = d[d.model == "pubmed_before_T"]
+        for name in strata:
+            ds = d[d[name]]
+            genes_s = ds.gene.unique()
+            if not len(genes_s):
+                continue
+            gid = {g: i for i, g in enumerate(genes_s)}
+            counts = rng.multinomial(len(genes_s), np.full(len(genes_s), 1 / len(genes_s)), size=NOVELTY_BOOT)
+            rs = ref[ref[name]]
+            rc = rs.gene.map(gid).values
+            ref_b = {m: _boot_means(rs[m].values.astype(float), rc, counts) for m in ("win", "hit")}
+            ref_pt = {m: rs[m].mean() for m in ("win", "hit")}
+            boots, stratum_rows = {}, []
+            for key, k in ds.groupby(NOVELTY_KEY, sort=False):
+                c = k.gene.map(gid).values
+                row = dict(universe=universe, graph=k.graph.iloc[0] if not pooled else "pooled",
+                           **dict(zip(NOVELTY_KEY, key)), stratum=name, n_future=len(genes_s),
+                           rho_pubmed_T=k.rho_pubmed_T.mean())
+                for m, col in (("win", "auroc"), ("hit", "recall_top10pct")):
+                    v = k[m].values.astype(float)
+                    b = boots[(key, m)] = _boot_means(v, c, counts)
+                    row |= {col: v.mean(), f"{col}_lo": np.quantile(b, 0.025), f"{col}_hi": np.quantile(b, 0.975),
+                            f"{col}_vs_pubmed": v.mean() - ref_pt[m],
+                            f"{col}_vs_pubmed_lo": np.quantile(b - ref_b[m], 0.025),
+                            f"{col}_vs_pubmed_hi": np.quantile(b - ref_b[m], 0.975)}
+                stratum_rows.append(row)
+            pt = {(tuple(r[k] for k in NOVELTY_KEY), m): r[col] for r in stratum_rows
+                  for m, col in (("win", "auroc"), ("hit", "recall_top10pct"))}
+            for row in stratum_rows:
+                if row["labels"] in ("-", "minikel"):
+                    continue
+                key = tuple(row[k] for k in NOVELTY_KEY)
+                twin = ("minikel", *key[1:])
+                for m, col in (("win", "auroc"), ("hit", "recall_top10pct")):
+                    if (twin, m) in boots:
+                        diff = boots[(key, m)] - boots[(twin, m)]
+                        row |= {f"{col}_vs_minikel": row[col] - pt[(twin, m)],
+                                f"{col}_vs_minikel_lo": np.quantile(diff, 0.025),
+                                f"{col}_vs_minikel_hi": np.quantile(diff, 0.975)}
+            rows += stratum_rows
+    return rows
+
+
+def time_split_coverage(universe: str, genes: list[str], graph: str, cum: pd.DataFrame, first_drugged: pd.Series,
+                        best_phase: pd.Series, pos_all: set) -> list[dict]:
+    """Who does the time split leave out? Minikel >= Phase III positives with no ChEMBL approval
+    date are excluded from it. If they differ systematically from the dated ones (less studied,
+    further from known targets), the time split is tilted towards rediscovery by construction.
+    Per group: study before T and now, novelty relative to the targets known before T."""
+    T = CFG["splits"]["time_split_year"]
+    pm_T = cum.reindex(genes, fill_value=0)[T - 1].values.astype(float)
+    pct_T = rankdata(pm_T) / len(pm_T)
+    pct_now = rankdata(data.pubmed_counts(universe)) / len(genes)
+    fd = first_drugged.reindex(genes)
+    ph = best_phase.reindex(genes).fillna(0).values
+    pos = np.array([x in pos_all for x in genes])
+    known = pos & (fd < T).values
+    pfam = pd.read_parquet(paths.PROCESSED / "features" / universe / "pfam.parquet").reindex(genes, fill_value=0).values > 0
+    fam = pfam[:, pfam[known].any(0)].any(1)
+    ei = np.load(paths.PROCESSED / "graphs" / universe / f"{graph}.real.npy")
+    adj = coo_matrix((np.ones(len(ei)), (ei[:, 0], ei[:, 1])), shape=(len(genes),) * 2).tocsr()
+    hops = dijkstra(adj, directed=False, unweighted=True, indices=np.flatnonzero(known), min_only=True)
+    groups = {f"first drugged < {T} (train)": known,
+              f"first drugged >= {T} (test)": pos & (fd >= T).values,
+              "undated, launched (excluded)": pos & fd.isna().values & (ph >= 5),
+              "undated, Phase III only (excluded)": pos & fd.isna().values & (ph < 5),
+              "no drug programme (reference)": ph == 0}
+    rows = []
+    for name, m in groups.items():
+        nov = _novelty_strata(pct_T[m], fam[m], hops[m])
+        rows.append(dict(universe=universe, group=name, genes=int(m.sum()),
+                         median_pubmed_pct_before_T=np.median(pct_T[m]), frac_top_decile_before_T=(pct_T[m] >= 0.9).mean(),
+                         median_pubmed_pct_now=np.median(pct_now[m]), frac_drugged_family=fam[m].mean(),
+                         frac_2plus_hops=(hops[m] >= 2).mean(), frac_novel=nov["novel"].mean(),
+                         frac_novel_2of3=nov["novel (2 of 3)"].mean()))
+    return rows
 
 
 def main():
     ensure.ensure_data()  # fetches any raw source added since the data was built (e.g. pmid_years.tsv)
     pos_all = labels.minikel(CFG["labels"]["minikel_min_phase"])
     membrane = labels.membrane()
-    sizes, hubs, mem, med, prior, audit, ladder, leak, novelty, lbias = [], [], [], [], [], [], [], [], [], []
+    sizes, hubs, mem, med, prior, audit, ladder, leak, lbias, cover = [], [], [], [], [], [], [], [], [], []
+    novelty_genes = []
     phase = labels.minikel_best_phase()
     first_drugged = labels.target_first_approval()
     launch = first_drugged[first_drugged.index.isin(pos_all)]
@@ -387,10 +520,15 @@ def main():
             a, l = prediction_audits(universe, genes, graph, phase)
             audit += a
             ladder += l
-            novelty += time_novelty(universe, genes, graph, cum, first_drugged)
+            novelty_genes.append(time_novelty_genes(universe, genes, graph, cum))
+            cover += time_split_coverage(universe, genes, graph, cum, first_drugged, phase, pos_all)
+    ng = pd.concat(novelty_genes, ignore_index=True) if novelty_genes else pd.DataFrame()
+    novelty = time_novelty(ng) + time_novelty(ng, pooled=True)
+    if not ng.empty:
+        ng.to_csv(OUT / "time_novelty_genes.csv.gz", index=False)
     for name, rows in (("graph_sizes", sizes), ("hub_bias", hubs), ("membrane", mem), ("mediation", med),
                        ("prior_study", prior), ("study_leak", leak), ("label_bias", lbias), ("topk_audit", audit),
-                       ("phase_ladder", ladder), ("time_novelty", novelty)):
+                       ("phase_ladder", ladder), ("time_novelty", novelty), ("time_split_coverage", cover)):
         if not rows:
             continue
         t = pd.DataFrame(rows)

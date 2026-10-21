@@ -13,6 +13,13 @@ contrast) it reports:
                   label better) on the test genes both share (genetic/time)
   stouffer_z, p   seeds combined with Stouffer's method (two-sided p)
   p_bh            Benjamini-Hochberg adjusted within the experiment
+effects.csv: effect sizes instead of counts of significant cells. Cells share seeds, genes and
+configurations, so counting them overstates the evidence. Per contrast (and per contrast x
+feature set / universe / split / loss / label set; random regime), the mean AUROC difference
+weighting every model equally (mean over models of the mean over that model's cells of the
+mean over seeds), with a 95% hierarchical bootstrap CI: resample models, then cells within each
+model, then seeds within each cell (2000 draws). The three universes are too few to resample,
+so they are reported separately. Per-seed deltas: delong_seeds.csv.gz.
 Test genes per regime are those evaluate.by_regime scores (random: all test positives vs all
 test unlabelled; matched regimes: the pooled matched sets). Labels are positive vs
 unlabelled, so these compare rankings of known targets against unlabelled genes.
@@ -86,6 +93,43 @@ def _compare(task: tuple) -> list[dict]:
     return rows
 
 
+EFFECT_BY = ["feats", "universe", "split", "loss", "labels"]
+
+
+def _hier_boot(g: pd.DataFrame, rng: np.random.Generator, n_boot: int = 2000) -> dict:
+    """Mean delta over models (each model's mean over its cells, each cell's mean over seeds)
+    with a model > cell > seed bootstrap CI."""
+    cells = [k for k in KEYS if k != "seed"] + ["regime", "contrast"]
+    model_boot, model_pt = [], []
+    for _, gm in g.groupby("model"):
+        cb, cp = [], []
+        for _, gc in gm.groupby(cells):
+            d = gc.delta.values
+            cb.append(d[rng.integers(0, len(d), (n_boot, len(d)))].mean(1))
+            cp.append(d.mean())
+        cb = np.stack(cb, 1)  # (n_boot, n_cells)
+        pick = rng.integers(0, cb.shape[1], cb.shape)
+        model_boot.append(np.take_along_axis(cb, pick, 1).mean(1))
+        model_pt.append(np.mean(cp))
+    mb = np.stack(model_boot, 1)  # (n_boot, n_models)
+    boot = np.take_along_axis(mb, rng.integers(0, mb.shape[1], mb.shape), 1).mean(1)
+    lo, hi = np.quantile(boot, [0.025, 0.975])
+    return dict(mean_delta=float(np.mean(model_pt)), ci_lo=lo, ci_hi=hi, n_models=mb.shape[1],
+                n_cells=int(g.groupby(cells).ngroups), n_seed_deltas=len(g))
+
+
+def effects(per_seed: pd.DataFrame) -> pd.DataFrame:
+    rng = np.random.default_rng(0)
+    d = per_seed[per_seed.regime == "random"]
+    rows = []
+    for by in [[]] + [[a] for a in EFFECT_BY if d[a].nunique() > 1]:
+        for key, g in d.groupby(["contrast"] + by):
+            key = key if isinstance(key, tuple) else (key,)
+            rows.append({"contrast": key[0], "by": by[0] if by else "-", "level": key[1] if by else "-",
+                         **_hier_boot(g, rng)})
+    return pd.DataFrame(rows)
+
+
 def run(exp: str) -> pd.DataFrame:
     out = RES / exp
     df = pd.read_csv(out / "results.csv").drop_duplicates("run_id")
@@ -117,6 +161,8 @@ def run(exp: str) -> pd.DataFrame:
     with ProcessPoolExecutor(workers) as ex:
         rows = [row for rs in ex.map(_compare, tasks, chunksize=16) for row in rs]
     per_seed = pd.DataFrame(rows)
+    per_seed.to_csv(out / "delong_seeds.csv.gz", index=False)
+    effects(per_seed).to_csv(out / "effects.csv", index=False)
     group = [k for k in KEYS if k != "seed"] + ["regime", "contrast"]
     g = per_seed.groupby(group)
     res = g.agg(n_seeds=("z", "size"), delta_auroc=("delta", "mean"),

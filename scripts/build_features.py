@@ -1,6 +1,7 @@
 """Stage 1c: node features + PubMed counts aligned to each universe.
 
 Output: data/processed/features/<universe>/{go,pfam,pathway,tract}.parquet (binary),
+        {go09,kegg09}.parquet (binary, annotations as of 2009: the "dated" feature set),
         {esm,seqfeat,gtex}.parquet (attention-free, z-scored), pubmed.parquet
 Genes missing from a source get an all-zero row (= the mean for z-scored blocks) and
 pubmed_count 0. The ESM-2 model is set in configs/data.yaml (attention_free.esm_model).
@@ -24,6 +25,8 @@ blocks = {
     "pfam": features.pfam(),
     "pathway": features.pathways(),
     "tract": features.tractability(),
+    "go09": features.go(gaf="goa_human_2009.gaf.gz"),
+    "kegg09": features.kegg_2009(),
 }
 pubmed = features.pubmed_counts()
 af = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))["attention_free"]

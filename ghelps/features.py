@@ -30,12 +30,14 @@ def _binary(pairs: pd.DataFrame, gene: str, term: str, min_genes: int, max_genes
     return m
 
 
-def go(min_genes: int = 10) -> pd.DataFrame:
+def go(min_genes: int = 10, gaf: str = "goa_human.gaf.gz") -> pd.DataFrame:
+    """GO term membership. gaf="goa_human_2009.gaf.gz" gives the annotations as of Dec 2009
+    (GOA release 80: GAF 1.0, isoform accessions, which map_uniprot strips)."""
     cols = ["db", "acc", "sym", "qual", "go", "ref", "evidence"]
-    df = pd.read_csv(ids.RAW / "goa_human.gaf.gz", sep="\t", comment="!", header=None,
+    df = pd.read_csv(ids.RAW / gaf, sep="\t", comment="!", header=None,
                      usecols=range(7), names=cols, dtype=str)
     df = df[~df.evidence.isin(GO_EXCLUDE_EVIDENCE) & ~df.go.isin(GO_EXCLUDE_TERMS)
-            & ~df.qual.str.startswith("NOT")]
+            & ~df.qual.fillna("").str.startswith("NOT")]
     df["ensg"] = ids.map_uniprot(df.acc).fillna(ids.map_symbols(df.sym))
     return _binary(df, "ensg", "go", min_genes).add_prefix("go:")
 
@@ -52,6 +54,13 @@ def pathways(min_genes: int = 5, max_genes: int = 500) -> pd.DataFrame:
                      names=["ens", "pw", "url", "name", "ev", "species"], usecols=[0, 1, 5])
     df = df[(df.species == "Homo sapiens") & df.ens.str.startswith("ENSG")]
     return _binary(df, "ens", "pw", min_genes, max_genes).rename_axis("ensg").add_prefix("rx:")
+
+
+def kegg_2009(min_genes: int = 5, max_genes: int = 500) -> pd.DataFrame:
+    """KEGG pathway membership as of Sep 2009 (fetch.py: kegg_2009.tsv)."""
+    df = pd.read_csv(ids.RAW / "kegg_2009.tsv", sep="\t", dtype=str)
+    df["ensg"] = df.entrez.map(ids.entrez_map())
+    return _binary(df, "ensg", "pathway", min_genes, max_genes).add_prefix("kegg:")
 
 
 def tractability() -> pd.DataFrame:

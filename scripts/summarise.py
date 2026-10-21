@@ -1,7 +1,8 @@
 """Aggregate an experiment's runs (called by `main.py summarise <exp> [metric]`).
 
 Reads results/<exp>/results.csv (rebuilt from the run JSONs) and writes:
-  summary_<metric>.csv   per (regime, split, loss, model, condition): mean, sd, n seeds
+  summary_<metric>.csv   per (regime, split, loss, model, condition): mean, sd, n seeds, and
+                         train_auroc (training-fold fit, mean over seeds; ~0.5 = failed to train)
   graph_effect_<metric>.csv   paired-by-seed deltas real−empty, real−rewired, real−shufattr
                               (mean, sd, #seeds where real wins) -- "does the graph matter?"
   gp_attribution.csv     GP per-block share of the predictive signal, by condition
@@ -31,6 +32,9 @@ keys = ["regime", "universe", "graph", "labels", "feats", "split", "loss", "mode
 # rewired copies are averaged within a seed first, so every seed counts once per condition
 per_seed = df.groupby(keys + ["seed", "cond"])[metric].mean().reset_index()
 summary = per_seed.groupby(keys + ["cond"])[metric].agg(["mean", "std", "count"]).reset_index()
+if "train_auroc" in df:
+    fit = df.groupby(keys + ["cond"]).train_auroc.mean().rename("train_auroc").reset_index()
+    summary = summary.merge(fit, on=keys + ["cond"], how="left")
 summary.to_csv(out / f"summary_{metric}.csv", index=False)
 
 wide = per_seed.pivot_table(index=keys + ["seed"], columns="cond", values=metric)

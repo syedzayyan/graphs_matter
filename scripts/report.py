@@ -2,11 +2,13 @@
 
   uv run python scripts/report.py            ->  summary.md (repo root)
 
-The template holds the prose and {{name}} placeholders; each placeholder is a markdown table
-built here from results/<exp>/*.csv and results/analysis/*.csv. A section whose inputs don't
-exist yet is skipped and its placeholders render as a note. Figures are linked from
-results/figures/ (scripts/figures.py). Numbers quoted in the template's prose are written by
-hand: re-check them when the results change.
+The template holds the prose and two kinds of placeholder, both built here from
+results/<exp>/*.csv and results/analysis/*.csv:
+  {{name}}     a markdown table
+  {{n:name}}   a number (or short list of numbers) quoted in the prose
+A section whose inputs don't exist yet is skipped; its placeholders render as a note (tables)
+or as [name?] (numbers). Figures are linked from results/figures/ (scripts/figures.py). Prose
+numbers not written as {{n:...}} are hand-written: re-check them when the results change.
 """
 import re
 import traceback
@@ -21,6 +23,8 @@ A = R / "analysis"
 TEMPLATE = ROOT / "scripts" / "report_template.md"
 OUT = ROOT / "summary.md"
 TABLES: dict[str, str] = {}
+NUMS: dict[str, str] = {}
+FIT_FAIL = 0.6  # training-fold AUROC below this = the model never fit its training data
 
 U = ["string", "reactome_fi", "huri"]
 UN = {"string": "STRING", "reactome_fi": "Reactome FI", "huri": "HuRI"}
@@ -32,7 +36,10 @@ MN = {"deg_lr": "degree LR", "rf_struct": "RF struct stats", "labelprop": "label
 ORDER = list(MN)
 REFS = ["pubmed_before_T", "pubmed_now", "known_family_count", "closeness_to_known"]
 STRATA = ["all", "study<0.5", "study 0.5-0.9", "study>=0.9", "drugged family", "new family", "1 hop", "2 hops",
-          "3+ hops", "novel"]
+          "3+ hops", "novel", "novel (2 of 3)"]
+UP = U + ["pooled"]
+UNP = UN | {"pooled": "pooled"}
+FEATS = ["all", "no_tract", "attn_free", "dated"]
 REGIMES = ["random", "degree", "pubmed", "pfam", "pathway", "hop2", "hop1"]
 
 
@@ -53,6 +60,19 @@ def put(name: str, df: pd.DataFrame, fmt="{:.3f}", index=True) -> None:
     TABLES[name] = md(df, fmt, index)
 
 
+def num(name: str, v, fmt="{:.2f}") -> None:
+    NUMS[name] = v if isinstance(v, str) else fmt.format(v)
+
+
+def nums3(vals, fmt="{:.2f}") -> str:
+    """'a / b / c' over STRING / Reactome FI / HuRI."""
+    return " / ".join("–" if pd.isna(v) else fmt.format(v) for v in vals)
+
+
+def ci(v, lo, hi, fmt="{:+.3f}") -> str:
+    return "–" if pd.isna(v) else f"{fmt.format(v)} [{fmt.format(lo)}, {fmt.format(hi)}]"
+
+
 def summ(exp: str) -> pd.DataFrame:
     s = pd.read_csv(R / exp / "summary_auroc.csv")
     s["feats"] = s["feats"].fillna("all")
@@ -70,9 +90,16 @@ def compact(exp, split, loss, feats="all", regime="random", labels="minikel") ->
     s = s[(s.split == split) & (s.loss == loss) & (s.feats == feats) & (s.regime == regime) & (s.labels == labels)]
     s = s.assign(c=np.where(s.cond.str.startswith("rw"), "rewired", s.cond))
     s = s[s.c.isin(["real", "rewired", "empty", "none"])]
-    t = s.groupby(["model", "universe", "c"])["mean"].mean().unstack("c")
-    t["cell"] = t.apply(lambda r: f"{r['none']:.3f} (no graph)" if pd.notna(r.get("none")) else " / ".join(
-        "–" if pd.isna(r.get(c)) else f"{r.get(c):.3f}" for c in ("real", "rewired", "empty")), axis=1)
+    if "train_auroc" not in s:
+        s = s.assign(train_auroc=np.nan)
+    g = s.groupby(["model", "universe", "c"])
+    t, fit = g["mean"].mean().unstack("c"), g["train_auroc"].mean().unstack("c")
+
+    def cell(m, u, c):
+        v = t.at[(m, u), c] if c in t else np.nan
+        return "–" if pd.isna(v) else f"{v:.3f}" + ("†" if fit.at[(m, u), c] < FIT_FAIL else "")
+    t["cell"] = [f"{cell(m, u, 'none')} (no graph)" if pd.notna(t.at[(m, u), "none"] if "none" in t else np.nan)
+                 else " / ".join(cell(m, u, c) for c in ("real", "rewired", "empty")) for m, u in t.index]
     t = t.cell.unstack("universe").reindex(columns=U)
     t.columns = [UN[u] for u in U]
     t = t.reindex([m for m in ORDER if m in t.index])
@@ -113,6 +140,51 @@ def setup():
     g["graph"] = g.graph.map(UN)
     put("graph_sizes", g[["graph", "condition", "nodes", "edges", "mean_degree", "median_degree", "max_degree",
                           "isolated", "positives", "positives_covered"]], "{:.2f}", index=False)
+
+
+def fit_failures():
+    """Every (experiment, model, condition) cell whose training-fold AUROC is below FIT_FAIL."""
+    rows = []
+    for exp in ("main", "waves", "membrane", "nonsense_labels", "nonsense_feats", "novelty"):
+        try:
+            s = summ(exp)
+        except FileNotFoundError:
+            continue
+        if "train_auroc" not in s:
+            continue
+        s = s[(s.regime == "random") & ~s.labels.isin(["minikel_perm"]) & ~s.feats.isin(["random"])]
+        rows.append(s.assign(exp=exp, n=len(s))[s.train_auroc < FIT_FAIL])
+    if not rows:
+        return
+    f = pd.concat(rows)
+    num("n_fit_fail", f"{len(f)}", "{}")
+    cols = ["exp", "universe", "labels", "feats", "split", "loss", "model", "cond", "train_auroc", "mean"]
+    f = by_model(f[cols].rename(columns={"mean": "test_auroc"}))
+    f["model"] = f.model.map(MN)
+    put("fit_failures", f if len(f) else pd.DataFrame({"note": ["none"]}), index=False)
+
+
+def pfam_tables():
+    """Random vs Pfam split per feature set: if the signal is resemblance to drugged families,
+    holding whole families out should hurt most where nothing else transfers across them."""
+    s = summ("main")
+    s = s[(s.regime == "random") & (s.loss == "nnpu") & (s.labels == "minikel")
+          & ((s.model.isin(["rf_feat", "mlp_feat"]) & (s.cond == "none"))
+             | (s.model.isin(["gp", "cs_feat", "sign_feat", "gcn_feat"]) & (s.cond == "real")))]
+    t = s.pivot_table(index=["model", "feats", "universe"], columns="split", values="mean")
+    t["drop"] = t.pfam - t.random
+    rf = t.loc["rf_feat"]
+    for fe in ("all", "no_tract", "attn_free"):
+        num(f"rf_pfam_{fe}", nums3([rf.at[(fe, u), "pfam"] if (fe, u) in rf.index else np.nan for u in U], "{:.3f}"))
+        num(f"rf_pfam_drop_{fe}", nums3([rf.at[(fe, u), "drop"] if (fe, u) in rf.index else np.nan for u in U], "{:+.3f}"))
+    t["cell"] = [f"{r.random:.3f} → {r.pfam:.3f} ({r.drop:+.3f})" for r in t.itertuples()]
+    w = t.cell.unstack("universe").reindex(columns=U)
+    w.columns = [UN[u] for u in U]
+    w = w.reset_index()
+    w["_f"] = w.feats.map(FEATS.index)
+    w = by_model(w.sort_values("_f")).drop(columns="_f")
+    w["model"] = w.model.map(MN)
+    put("pfam_drop", w, index=False)
 
 
 def main_tables():
@@ -157,6 +229,33 @@ def delong_tables():
         put(f"delong_{exp}_regimes", t.cell.unstack("regime"))
 
 
+def effect_tables():
+    """Hierarchical-bootstrap effect sizes (scripts/delong.py: effects.csv)."""
+    for exp in ("main", "waves", "membrane", "nonsense_labels", "nonsense_feats", "novelty"):
+        f = R / exp / "effects.csv"
+        if not f.exists():
+            continue
+        e = pd.read_csv(f)
+        e["cell"] = [ci(r.mean_delta, r.ci_lo, r.ci_hi) for r in e.itertuples()]
+        w = e.pivot_table(index=["by", "level"], columns="contrast", values="cell", aggfunc="first")
+        n = e[e.by == "-"].set_index("contrast")
+        w.columns = [f"{c} ({int(n.at[c, 'n_models'])} models)" if c in n.index else c for c in w.columns]
+        put(f"effects_{exp}", w.fillna("–"))
+        for r in e.itertuples():
+            name = f"eff_{exp}_{r.contrast}" + ("" if r.by == "-" else f"_{r.level}")
+            num(name, ci(r.mean_delta, r.ci_lo, r.ci_hi))
+    if not (R / "main" / "delong.csv").exists():
+        return
+    d = delong("main")
+    d = d[d.regime == "random"]
+    for c in ("empty", "rewired", "vs_rf_feat"):
+        x = d[d.contrast == c]
+        num(f"cnt_main_{c}", f"{int(x.better.sum())} better / {int(x.worse.sum())} worse of {len(x)}")
+        for fe in ("all", "attn_free"):
+            y = x[x.feats == fe]
+            num(f"cnt_main_{c}_{fe}", f"{int(y.better.sum())} / {int(y.worse.sum())} of {len(y)}")
+
+
 def feature_tables():
     s = summ("main")
     fs = s[s.split.isin(["random", "pfam"]) & (s.loss == "nnpu") & (s.labels == "minikel")
@@ -165,7 +264,7 @@ def feature_tables():
     for sp in ("random", "pfam"):
         t = fs[fs.split == sp].pivot_table(index=["universe", "model", "feats"], columns="regime", values="mean")
         t = t.reindex(columns=["random", "pubmed", "degree", "pfam", "pathway", "hop1"]).reset_index()
-        t["_u"], t["_f"] = t.universe.map(U.index), t.feats.map(["all", "no_tract", "attn_free"].index)
+        t["_u"], t["_f"] = t.universe.map(U.index), t.feats.map(FEATS.index)
         t = t.sort_values(["_u", "model", "_f"]).drop(columns=["_u", "_f"])
         t["universe"], t["model"] = t.universe.map(UN), t.model.map(MN)
         put(f"feats_{sp}", t, index=False)
@@ -198,15 +297,43 @@ def analysis_tables():
     p["universe"] = p.universe.map(UN)
     put("prior_study", p, index=False)
     sl = pd.read_csv(A / "study_leak.csv").pivot_table(index="feats", columns="universe", values="rho_rf_pred_log_pubmed")
-    sl = sl.reindex(["all", "no_tract", "attn_free", "all_resid", "attn_free_resid"]).reindex(columns=U)
+    sl = sl.reindex(["all", "no_tract", "attn_free", "dated", "all_resid", "attn_free_resid"]).reindex(columns=U)
+    for fe in ("all", "attn_free", "dated", "all_resid", "attn_free_resid"):
+        if fe in sl.index:
+            num(f"leak_{fe}", nums3(sl.loc[fe].values))
     sl.columns = [UN[u] for u in U]
     put("study_leak", sl)
+    pr = pd.read_csv(A / "prior_study.csv")
+    pr = pr[(pr.years_before_launch == 10) & pr.launch_period.isin(["2000-2009", "2010-2024"])]
+    num("prior_pct_10y", f"{pr.median_percentile.min() * 100:.0f}th–{pr.median_percentile.max() * 100:.0f}th")
+    num("prior_auroc_10y", f"{pr.auroc_vs_no_programme.min():.2f}–{pr.auroc_vs_no_programme.max():.2f}")
 
 
 def label_bias():
     lb = pd.read_csv(A / "label_bias.csv")
     lb["universe"] = lb.universe.map(UN)
     put("label_bias", lb, index=False)
+    for key, name in (("minikel", "minikel (>= Phase III)"), ("genetic_T", "genetic evidence before 2010")):
+        x = lb[lb.label == name].set_index("universe").reindex([UN[u] for u in U])
+        num(f"lb_{key}_auroc", nums3(x.pubmed_auroc_now))
+        num(f"lb_{key}_auroc_T", nums3(x.pubmed_auroc_before_T))
+        num(f"lb_{key}_n", nums3(x.positives, "{:.0f}"))
+
+
+def coverage_table():
+    c = pd.read_csv(A / "time_split_coverage.csv")
+    c["universe"] = c.universe.map(UN)
+    put("time_split_coverage", c, index=False)
+    s = c[c.universe == "STRING"].set_index("group")
+    ex = [g for g in s.index if "excluded" in g]
+    te = [g for g in s.index if "(test)" in g][0]
+    num("cov_n_excluded", f"{int(s.loc[ex, 'genes'].sum())}", "{}")
+    num("cov_test_top", f"{s.at[te, 'frac_top_decile_before_T']:.0%}")
+    num("cov_excl_top", " / ".join(f"{s.at[g, 'frac_top_decile_before_T']:.0%}" for g in ex))
+    num("cov_test_novel2", f"{s.at[te, 'frac_novel_2of3']:.0%}")
+    num("cov_excl_novel2", " / ".join(f"{s.at[g, 'frac_novel_2of3']:.0%}" for g in ex))
+    num("cov_test_fam", f"{s.at[te, 'frac_drugged_family']:.0%}")
+    num("cov_excl_fam", " / ".join(f"{s.at[g, 'frac_drugged_family']:.0%}" for g in ex))
 
 
 def discovery_tables():
@@ -255,15 +382,75 @@ def _strata(nv, u, metric, label_rows, models=("rf_feat", "mlp_feat", "gp", "cs_
     return t
 
 
+CI_MODELS = ("rf_feat", "mlp_feat", "gp", "cs_feat", "gcn_feat")
+
+
+def _ci_table(nv, metric, stratum, labels=("minikel",), models=CI_MODELS, losses=("nnpu", "pn_pubmed"),
+              refs=True, diff=None) -> pd.DataFrame:
+    """Rows = reference rankers and models, columns = graphs + pooled; cells 'value [95% CI]'
+    for one stratum. diff="pubmed": the paired difference from PubMed-before-T; diff="minikel":
+    from the run's Minikel-trained twin (genetic rows only)."""
+    x = nv[nv.stratum == stratum]
+    keep = x[(x.model.isin(REFS) & refs) | (x.model.isin(models) & x.loss.isin(losses) & x["copy"].isin(["real", "none"])
+                                             & x["labels"].isin(labels))]
+    if diff == "pubmed":
+        keep = keep[keep.model != "pubmed_before_T"]
+    c = f"{metric}_vs_{diff}" if diff else metric
+    if c not in keep:
+        raise KeyError(c)
+    keep = keep.dropna(subset=[c])
+    keep = keep.assign(cell=[ci(getattr(r, c), getattr(r, f"{c}_lo"), getattr(r, f"{c}_hi"),
+                                "{:+.2f}" if diff else "{:.2f}") for r in keep.itertuples()])
+    w = keep.pivot_table(index=["labels", "model", "copy", "feats", "loss"], columns="universe", values="cell",
+                         aggfunc="first").reindex(columns=[u for u in UP if u in keep.universe.unique()])
+    n = x[x.model == "pubmed_before_T"].set_index("universe").n_future
+    w.columns = [f"{UNP[u]} (n={int(n[u])})" if u in n.index else UNP[u] for u in w.columns]
+    w = w.reset_index()
+    w["_r"], w["_f"] = ~w.model.isin(REFS), w.feats.map(lambda f: (["-"] + FEATS).index(f))
+    w = by_model(w).sort_values(["_r", "_f", "loss", "labels"], kind="stable").drop(columns=["_r", "_f"])
+    w["model"] = w.model.map(lambda v: MN.get(v, v))
+    return w.fillna("–")
+
+
 def novelty_tables():
     nv = pd.read_csv(A / "time_novelty.csv")
     if "labels" not in nv:
         nv["labels"] = np.where(nv.model.isin(REFS), "-", "minikel")
     comp = nv[nv.model == "pubmed_before_T"].pivot_table(index="stratum", columns="universe", values="n_future")
-    comp = comp.reindex(STRATA).reindex(columns=U)
+    comp = comp.reindex(STRATA).reindex(columns=[u for u in UP if u in comp.columns])
     comp = comp.apply(lambda c: [f"{int(v)} ({v / c['all']:.0%})" if pd.notna(v) else "0" for v in c])
-    comp.columns = [UN[u] for u in U]
+    comp.columns = [UNP[u] for u in comp.columns]
     put("novelty_composition", comp)
+    n = nv[nv.model == "pubmed_before_T"].pivot_table(index="universe", columns="stratum", values="n_future")
+    n = n.reindex(UP).fillna(0)
+    share = lambda s: nums3([n.at[u, s] / n.at[u, "all"] for u in U], "{:.0%}")  # noqa: E731
+    num("fut_n", nums3(n.loc[U, "all"], "{:.0f}"))
+    num("fut_top_decile", share("study>=0.9"))
+    num("fut_below_median", share("study<0.5"))
+    num("fut_1hop", share("1 hop"))
+    num("fut_3hop", share("3+ hops"))
+    num("fut_new_family", share("new family"))
+    num("novel_n", nums3(n.loc[U, "novel"], "{:.0f}"))
+    num("novel_share", share("novel"))
+    num("novel2_n", nums3(n.loc[U, "novel (2 of 3)"], "{:.0f}"))
+    num("novel_n_pooled", f"{n.at['pooled', 'novel']:.0f}" if "pooled" in n.index else "–")
+    num("novel2_n_pooled", f"{n.at['pooled', 'novel (2 of 3)']:.0f}" if "pooled" in n.index else "–")
+
+    def pick(model, stratum="all", metric="auroc", feats="-", loss="-", labels="-", copy="none", us=U):
+        x = nv[(nv.model == model) & (nv.stratum == stratum) & (nv.feats == feats) & (nv.loss == loss)
+               & (nv["labels"] == labels) & (nv["copy"] == copy)].set_index("universe")
+        return [x.at[u, metric] if u in x.index else np.nan for u in us]
+    for ref in REFS:
+        num(f"ref_{ref}_auroc", nums3(pick(ref)))
+        num(f"ref_{ref}_recall_novel", nums3(pick(ref, "novel", "recall_top10pct"), "{:.0%}"))
+        num(f"ref_{ref}_recall_novel2", nums3(pick(ref, "novel (2 of 3)", "recall_top10pct"), "{:.0%}"))
+    for fe in FEATS:
+        for lab in ("minikel", "genetic"):
+            k = dict(feats=fe, loss="nnpu", labels=lab)
+            num(f"rf_time_{lab}_{fe}", nums3(pick("rf_feat", **k)))
+            num(f"rf_time_{lab}_{fe}_novel2", nums3(pick("rf_feat", "novel (2 of 3)", **k)))
+            num(f"rf_time_{lab}_{fe}_recall_novel2", nums3(pick("rf_feat", "novel (2 of 3)", "recall_top10pct", **k),
+                                                       "{:.0%}"))
     for metric in ("auroc", "recall_top10pct"):
         for u in U:
             put(f"novelty_{metric}_{u}", _strata(nv, u, metric, ["minikel"]), "{:.2f}", index=False)
@@ -271,14 +458,54 @@ def novelty_tables():
                 put(f"genetic_{metric}_{u}", _strata(nv, u, metric, ["minikel", "genetic"],
                                                      models=("rf_feat", "mlp_feat", "gp", "cs_feat"),
                                                      losses=("nnpu",), refs=False), "{:.2f}", index=False)
+        for st, tag in (("novel", "novel"), ("novel (2 of 3)", "novel2"), ("new family", "newfam")):
+            put(f"novelty_ci_{metric}_{tag}", _ci_table(nv, metric, st), index=False)
+            put(f"novelty_vs_pubmed_{metric}_{tag}", _ci_table(nv, metric, st, diff="pubmed"), index=False)
+            if (nv.labels == "genetic").any():
+                put(f"genetic_ci_{metric}_{tag}", _ci_table(nv, metric, st, labels=("minikel", "genetic"),
+                                                            models=("rf_feat", "mlp_feat", "gp", "cs_feat"),
+                                                            losses=("nnpu",), refs=False), index=False)
+                put(f"genetic_vs_minikel_{metric}_{tag}", _ci_table(nv, metric, st, labels=("genetic",),
+                                                                    models=("rf_feat", "mlp_feat", "gp", "cs_feat"),
+                                                                    losses=("nnpu",), refs=False, diff="minikel"),
+                    index=False)
+    if (nv.labels == "genetic").any():
+        genetic_endpoints(nv)
     for lo in ("nnpu", "pn", "pn_pubmed"):
-        for fe in ("all", "attn_free"):
+        for fe in ("all", "attn_free", "dated"):
             put(f"novelty_head_time_{lo}_{fe}", compact("novelty", "time", lo, feats=fe))
             if (summ("novelty").labels == "genetic").any():
                 put(f"genetic_head_time_{lo}_{fe}", compact("novelty", "time", lo, feats=fe, labels="genetic"))
-    for fe, name in (("all", "novelty_regimes_time"), ("attn_free", "novelty_regimes_time_attn")):
+    for fe, name in (("all", "novelty_regimes_time"), ("attn_free", "novelty_regimes_time_attn"),
+                     ("dated", "novelty_regimes_time_dated")):
         put(name, regimes("novelty", ["rf_feat", "mlp_feat", "gp", "cs_feat", "gcn_feat"], split="time", feats=fe),
             index=False)
+
+
+PRIMARY = dict(stratum="novel (2 of 3)", universe="pooled", loss="nnpu", models=("rf_feat", "gp"),
+               feats=("attn_free", "dated"))
+
+
+def genetic_endpoints(nv):
+    """§6.4's pre-stated endpoint: recall@10% of the novel (2 of 3) future targets, pooled over
+    graphs, genetic-trained minus Minikel-trained (paired bootstrap CI), for RF and the GP with
+    the leak-free feature sets. Plus how closely each label's rankings follow study at T."""
+    x = nv[(nv.stratum == PRIMARY["stratum"]) & (nv.universe == PRIMARY["universe"]) & (nv.loss == PRIMARY["loss"])
+           & (nv["labels"] == "genetic") & nv.model.isin(PRIMARY["models"]) & nv.feats.isin(PRIMARY["feats"])
+           & nv["copy"].isin(["real", "none"])]
+    for r in x.itertuples():
+        num(f"primary_{r.model}_{r.feats}", ci(r.recall_top10pct_vs_minikel, r.recall_top10pct_vs_minikel_lo,
+                                               r.recall_top10pct_vs_minikel_hi, "{:+.2f}"))
+    rho = nv[(nv.stratum == "all") & nv["labels"].isin(["minikel", "genetic"]) & (nv.loss == "nnpu")
+             & nv.model.isin(["rf_feat", "mlp_feat", "gp", "cs_feat"]) & nv["copy"].isin(["real", "none"])]
+    w = rho.pivot_table(index=["model", "copy", "feats", "universe"], columns="labels", values="rho_pubmed_T")
+    w["genetic − minikel"] = w.genetic - w.minikel
+    w = w.reset_index()
+    w["_u"] = w.universe.map(UP.index)
+    w = by_model(w.sort_values(["_u", "feats"])).drop(columns="_u")
+    w["universe"], w["model"] = w.universe.map(UNP), w.model.map(MN)
+    put("genetic_rho", w, "{:+.2f}", index=False)
+    num("rho_shift", f"{w['genetic − minikel'].min():+.2f} to {w['genetic − minikel'].max():+.2f}")
 
 
 def genetic_delong():
@@ -318,8 +545,9 @@ def control_tables():
     put("nf_random", compact("nonsense_feats", "random", "nnpu", feats="random"))
 
 
-SECTIONS = [setup, main_tables, delong_tables, feature_tables, analysis_tables, label_bias, discovery_tables,
-            gp_table, novelty_tables, genetic_delong, waves_tables, control_tables]
+SECTIONS = [setup, fit_failures, main_tables, pfam_tables, delong_tables, effect_tables, feature_tables,
+            analysis_tables, label_bias, coverage_table, discovery_tables, gp_table, novelty_tables, genetic_delong,
+            waves_tables, control_tables]
 
 
 def main():
@@ -338,11 +566,18 @@ def main():
         missing.append(m.group(1))
         return f"*(table `{m.group(1)}` not available: its results are missing)*"
 
-    text = re.sub(r"\{\{(\w+)\}\}", fill, TEMPLATE.read_text())
+    def fill_num(m):
+        if m.group(1) in NUMS:
+            return NUMS[m.group(1)]
+        missing.append("n:" + m.group(1))
+        return f"[{m.group(1)}?]"
+
+    text = re.sub(r"\{\{n:(\w+)\}\}", fill_num, TEMPLATE.read_text())
+    text = re.sub(r"\{\{(\w+)\}\}", fill, text)
     OUT.write_text(text)
     images = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", text)
     gone = [i for i in images if not (ROOT / i).exists()]
-    print(f"wrote {OUT}: {len(TABLES)} tables, {len(images)} figures"
+    print(f"wrote {OUT}: {len(TABLES)} tables, {len(NUMS)} numbers, {len(images)} figures"
           + (f"; missing tables: {missing}" if missing else "") + (f"; missing figures: {gone}" if gone else ""))
 
 

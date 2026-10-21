@@ -157,6 +157,31 @@ def _genetic_evidence(dest: Path) -> None:
     out.to_csv(dest, sep="\t", index=False)
 
 
+# Annotation snapshots from just before the time-split cut-off (2010), for the "dated" feature
+# set: what a forecaster in 2009 could have known. GOA human release 80 (2009-12-17); KEGG
+# pathways as of 2009-09-16, from the Bioconductor 2.5 KEGG.db package (KEGG's own archive
+# is not public).
+GOA_2009 = "https://ftp.ebi.ac.uk/pub/databases/GO/goa/old/HUMAN/gene_association.goa_human.80.gz"
+KEGG_2009 = "https://bioconductor.org/packages/2.5/data/annotation/src/contrib/KEGG.db_2.3.5.tar.gz"
+
+
+def _kegg_2009(dest: Path) -> None:
+    """Human KEGG pathway -> Entrez gene pairs from the KEGG.db 2.3.5 SQLite database."""
+    import sqlite3
+    import tarfile
+    tgz = dest.with_suffix(".tar.gz")
+    _download(KEGG_2009, tgz)
+    db = dest.with_suffix(".sqlite")
+    with tarfile.open(tgz) as tf, open(db, "wb") as out:
+        shutil.copyfileobj(tf.extractfile("KEGG.db/inst/extdata/KEGG.sqlite"), out)
+    with sqlite3.connect(db) as con:
+        pairs = pd.read_sql("SELECT pathway_id AS pathway, gene_or_orf_id AS entrez FROM pathway2gene "
+                            "WHERE pathway_id LIKE 'hsa%'", con)
+    pairs.to_csv(dest, sep="\t", index=False)
+    tgz.unlink()
+    db.unlink()
+
+
 def url(u: str):
     return lambda dest: _download(u, dest)
 
@@ -218,6 +243,8 @@ SOURCES: dict[str, callable] = {
     "chembl_approvals.tsv": _chembl_approvals,  # dates when each target was first drugged (time split)
     "genetic_evidence.tsv": _genetic_evidence,  # human genetic evidence per gene (genetic label)
     "goa_human.gaf.gz": url("https://current.geneontology.org/annotations/goa_human.gaf.gz"),
+    "goa_human_2009.gaf.gz": url(GOA_2009),  # dated features (GO as of Dec 2009)
+    "kegg_2009.tsv": _kegg_2009,               # dated features (KEGG pathways as of Sep 2009)
     "ensembl2reactome.txt": url("https://reactome.org/download/current/Ensembl2Reactome_All_Levels.txt"),
     "uniprot_human.tsv.gz": url("https://rest.uniprot.org/uniprotkb/stream?query=organism_id:9606+AND+reviewed:true"
                                 "&fields=accession,gene_primary,xref_pfam,xref_ensembl&format=tsv&compressed=true"),

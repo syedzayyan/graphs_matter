@@ -11,6 +11,7 @@ import multiprocessing as mp
 import json
 import time
 import traceback
+from functools import lru_cache
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -136,6 +137,7 @@ def execute(r: dict, out: Path) -> str:
             deg = data._struct(r["universe"], r["graph"], "real")[1]
         extra = evaluate.degree_dependence(s, deg, p.mask("test"))
         extra["val_auprc"] = evaluate.val_auprc(s, p.y, p.fold)
+        extra["train_auroc"] = evaluate.train_auroc(s, p.y, p.fold)
         if "gp_parts" in extras:
             extra.update(_gp_summary(extras, s, p))
             pd.DataFrame({**extras["gp_parts"], "score": s, "sd": extras["gp_sd"]}).astype(np.float32) \
@@ -190,6 +192,24 @@ def run(exp: dict, workers: int, best: dict | None = None, shard: tuple[int, int
     return out
 
 
+@lru_cache(maxsize=256)
+def _split_fold(universe: str, labels: str, split: str, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    sp = pd.read_parquet(_PROCESSED / "splits" / universe / labels / split / f"seed{seed}.parquet")
+    return sp.y.values, sp.fold.values
+
+
+def _train_auroc(c: dict, scores: Path) -> float | None:
+    """Training-fold AUROC from the saved scores, for runs recorded before it was logged."""
+    from ghelps import evaluate
+    if not scores.exists():
+        return None
+    try:
+        y, fold = _split_fold(c["universe"], c["labels"], c["split"], int(c["seed"]))
+    except FileNotFoundError:
+        return None
+    return evaluate.train_auroc(np.load(scores).astype(float), y, fold)
+
+
 def collect(out: Path) -> pd.DataFrame:
     """Finished runs of the current grid (manifest.txt) -> <out>/results.csv, one row per
     run x evaluation regime, with the full config (incl. hyperparameters) and run-level
@@ -209,6 +229,7 @@ def collect(out: Path) -> pd.DataFrame:
         hp = {k: v for k, v in c.items() if k not in AXES}
         base = {**{a: c.get(a) for a in AXES}, "run_id": f.stem, "hparams": json.dumps(hp, sort_keys=True),
                 "rho_degree_test": r.get("spearman_degree_test"), "val_auprc": r.get("val_auprc"),
+                "train_auroc": r["train_auroc"] if "train_auroc" in r else _train_auroc(c, out / "scores" / f"{f.stem}.npy"),
                 "seconds": r.get("seconds")}
         base.update({f"gp_share_{k}": v for k, v in r.get("gp_share", {}).items()})
         if "gp_sd_vs_degree" in r:
