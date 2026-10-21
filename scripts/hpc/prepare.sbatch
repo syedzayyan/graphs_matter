@@ -13,3 +13,6 @@ cd "${SLURM_SUBMIT_DIR}"
 source scripts/hpc/env.sh   # GHELPS_DATA on scratch
 uv sync --frozen
 uv run python main.py build
+# create the shared Optuna database once, so ~100 tune tasks starting together don't race to
+# write its schema (one lost the race on a fresh results/: UNIQUE constraint failed: alembic_version)
+uv run python -c "import yaml; from tune import ROOT, storage_for; o = ROOT / yaml.safe_load(open('configs/tune.yaml')).get('out', 'results/tuning'); o.mkdir(parents=True, exist_ok=True); storage_for(o)"
