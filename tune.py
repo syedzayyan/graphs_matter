@@ -17,6 +17,7 @@ interrupted run resumes.
 Output: <out>/best_params.yaml  {model: {loss: {condition: {param: value}}}}  + trial CSVs
 """
 import argparse
+import fcntl
 import os
 import sys
 from pathlib import Path
@@ -157,9 +158,16 @@ def main() -> None:
 def storage_for(out: Path) -> optuna.storages.RDBStorage:
     """The shared SQLite study database. ~100 array tasks write to it at once, so wait up to
     10 min for the write lock instead of SQLite's default 5 s (which crashed tasks with
-    "database is locked")."""
-    return optuna.storages.RDBStorage(f"sqlite:///{out / 'optuna.db'}",
-                                      engine_kwargs={"connect_args": {"timeout": 600}})
+    "database is locked"). Opening it checks and may write the schema version, which races
+    when tasks start together (UNIQUE constraint / "table alembic_version already exists"),
+    so tasks open it one at a time under a file lock."""
+    with open(out / ".optuna.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            return optuna.storages.RDBStorage(f"sqlite:///{out / 'optuna.db'}",
+                                              engine_kwargs={"connect_args": {"timeout": 600}})
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def write_best(out: Path, storage: optuna.storages.RDBStorage, cfg: dict) -> None:
