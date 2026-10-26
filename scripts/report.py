@@ -357,6 +357,29 @@ def discovery_tables():
         put(f"ladder_{u}", t, index=False)
 
 
+EXT_COLS = {"n": "genes", "frac_phase3": "≥ Phase III", "frac_in_programme": "in a programme",
+            "frac_top_pubmed_decile": "top study decile", "frac_shares_pfam_with_phase3": "Pfam with a ≥ PhIII gene",
+            "frac_adjacent_to_phase3": "adjacent to a ≥ PhIII gene", "frac_genetic": "genetic evidence",
+            "frac_tchem": "Tchem", "frac_tbio": "Tbio", "frac_tdark": "Tdark"}
+
+
+def external_tables():
+    """§5.3: published top lists vs our models and a PubMed ranker (analysis.py: external_audit.csv)."""
+    e = pd.read_csv(A / "external_audit.csv")
+    for lst, d in e.groupby("list", sort=False):
+        t = d[["ranker", "subset", *EXT_COLS]].copy()
+        t[[c for c in EXT_COLS if c != "n"]] = t[[c for c in EXT_COLS if c != "n"]].map("{:.0%}".format)
+        t["n"] = t.n.astype(int).astype(str)
+        put(f"ext_{lst.split('-')[-1].lower()}", t.rename(columns=EXT_COLS), index=False)
+    x = e[(e.list == "DrugnomeAI-Tclin") & (e.subset == "novel")].set_index("ranker")
+    for r, k in (("DrugnomeAI-Tclin", "dn"), ("RF (all), ours", "rf"), ("all genes", "base")):
+        for c in ("n", "frac_in_programme", "frac_shares_pfam_with_phase3", "frac_adjacent_to_phase3", "frac_tchem"):
+            num(f"ext_{k}_{c}", f"{x.at[r, c]:.0f}" if c == "n" else f"{x.at[r, c]:.0%}")
+    a = e[(e.list == "DrugnomeAI-Tclin") & (e.subset == "all")].set_index("ranker")
+    num("ext_dn_phase3", f"{a.at['DrugnomeAI-Tclin', 'frac_phase3']:.0%}")
+    num("ext_dn_mapped", f"{a.at['DrugnomeAI-Tclin', 'n']:.0f}")
+
+
 def gp_table():
     gp = pd.read_csv(R / "main" / "gp_attribution.csv")
     gp["feats"] = gp.feats.fillna("all")
@@ -681,8 +704,8 @@ def control_tables():
 
 
 SECTIONS = [setup, fit_failures, main_tables, pfam_tables, delong_tables, effect_tables, feature_tables,
-            analysis_tables, label_bias, coverage_table, discovery_tables, gp_table, novelty_tables, genetic_topk,
-            tried_tables, tuned_tables, dated_tables, genetic_delong, waves_tables, control_tables]
+            analysis_tables, label_bias, coverage_table, discovery_tables, external_tables, gp_table, novelty_tables,
+            genetic_topk, tried_tables, tuned_tables, dated_tables, genetic_delong, waves_tables, control_tables]
 
 
 def main():

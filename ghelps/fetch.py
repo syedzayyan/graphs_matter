@@ -27,6 +27,7 @@ STRING = "https://stringdb-downloads.org/download"
 MINIKEL = "https://raw.githubusercontent.com/ericminikel/genetic_support/main/data"
 INTACT_HUMAN = "https://ftp.ebi.ac.uk/pub/databases/intact/current/psimitab/species/human.zip"
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+EUROPEPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest"
 HURI = "https://interactome-atlas.org/data/HuRI.tsv"  # the www. host has a mismatched TLS cert
 BIOGRID_2009 = ("https://downloads.thebiogrid.org/Download/BioGRID/Release-Archive/BIOGRID-2.0.60/"
                 "BIOGRID-ORGANISM-2.0.60.tab.zip")  # released 27 Dec 2009: the dated graph
@@ -225,6 +226,21 @@ def _biogrid_2009(dest: Path) -> None:
     z.unlink()
 
 
+def _drugnomeai_top(dest: Path) -> None:
+    """DrugnomeAI's published top-5% gene lists (Raies et al. 2022, Commun Biol,
+    Supplementary Data 1; via Europe PMC): one row per gene, list name and rank."""
+    z = dest.parent / "drugnomeai_supp.zip"
+    if not z.exists():
+        _download(f"{EUROPEPMC}/PMC9700683/supplementaryFiles", z)
+    with zipfile.ZipFile(z) as zf, zf.open("42003_2022_4245_MOESM4_ESM.xlsx") as fh:
+        x = pd.read_excel(io.BytesIO(fh.read()), header=None, skiprows=4)
+    names = ["DrugnomeAI-Tclin", "DrugnomeAI-Tier1"]
+    rows = [(n, i + 1, str(g).replace("\ufeff", "").strip()) for j, n in enumerate(names)
+            for i, g in enumerate(x[j].dropna())]
+    pd.DataFrame(rows, columns=["list", "rank", "symbol"]).to_csv(dest, sep="\t", index=False)
+    z.unlink()
+
+
 def _ot_dataset(name: str):
     def fetch(dest: Path) -> None:
         listing = urllib.request.urlopen(f"{OT}/{name}/", timeout=120).read().decode()
@@ -278,6 +294,7 @@ SOURCES: dict[str, callable] = {
     "gtex_median_tpm.gct.gz": url("https://storage.googleapis.com/adult-gtex/bulk-gex/v10/rna-seq/"
                                   "GTEx_Analysis_v10_RNASeQCv2.4.2_gene_median_tpm.gct.gz"),
     "pharos_targets.tsv": _pharos,
+    "external/drugnomeai_top5pct.tsv": _drugnomeai_top,  # published top lists (report 5.3)
     **{f"minikel/{f}": url(f"{MINIKEL}/{f}") for f in ("pp.tsv", "areas.tsv", "indic.tsv", "universe.tsv")},
 }
 

@@ -45,6 +45,7 @@ All raw files are downloaded by `ghelps/fetch.py` into `$GHELPS_DATA/raw`, which
 | IntAct | current human MITAB | edge-vector membership bit |
 | Reactome FI | `FIsInGene_04142025_with_annotations` | Reactome FI graph |
 | HuRI | `HuRI.tsv` (interactome-atlas.org) | HuRI graph |
+| BioGRID 2.0.60 | `BIOGRID-ORGANISM-2.0.60.tab.zip` (27 Dec 2009), human file | dated graph (§6.3) |
 | HGNC | complete set | symbol → Ensembl mapping |
 | NCBI gene2pubmed | current | PubMed counts per gene (study intensity) |
 | PubMed E-utilities | every 20,000th PMID's Entrez date | dating papers (PMID → year) |
@@ -57,7 +58,8 @@ All raw files are downloaded by `ghelps/fetch.py` into `$GHELPS_DATA/raw`, which
 | UniProt (reviewed human) | TSV (accession, gene, Pfam, Ensembl), FASTA | Pfam features, sequences |
 | GTEx v10 | gene median TPM | expression features |
 | ESM-2 | `facebook/esm2_t12_35M_UR50D` | protein embeddings |
-| Pharos | target development levels (GraphQL) | built but unused in reported experiments |
+| Pharos | target development levels (GraphQL) | novel-subset definition and TDL shares in §5.3 |
+| DrugnomeAI (Raies et al. 2022) | Supplementary Data 1 via Europe PMC: top-5% lists of the Tclin and Tier 1 models | published-list audit (§5.3) |
 | Minikel et al. | `pp.tsv`, `indic.tsv`, `areas.tsv`, `universe.tsv` (GitHub `ericminikel/genetic_support`) | drug-target label, phases, indications, therapy areas |
 
 **Download handling.** Downloads go through a `.part` file that is renamed when complete, and are retried with exponential backoff (5 attempts, starting at 30 s). Gzip files are test-read after fetching.
@@ -481,6 +483,7 @@ For each contrast, the effect size is the mean AUROC difference, using random ne
 | `time_novelty.csv` | Novelty strata (below) with the CIs of §10.3. |
 | `time_topk_audit.csv` | Time split, nnPU, `all` / `attn_free` / `dated`, real graph or none, both labels: the top-100 test genes per run (each seed's own test set; the test negatives are redrawn per seed). Reports the share that are future targets and novel (2 of 3) future targets, the median PubMed percentile before 2010 and the share in that top decile, the share in a drug programme today, the share sharing Pfam with or within 1 hop of a target drugged before 2010, and the share with genetic evidence before 2010 and at any date. Reference rows: all test genes, and the PubMed-before-2010 ranker. Mean over seeds. |
 | `tried_*.csv` | Success given tried (§6.5). Genes are grouped from Minikel's target–indication pairs: never tried (nothing beyond preclinical), tried (≥ Phase I), success (≥ Phase III, i.e. the label), and resolved failure (best Phase I/II with no active programme; active ones are censored). For each predictor it reports AUROC for the label (success vs rest), selection (tried vs never) and outcome (success vs resolved failure), with 95% CIs from 2,000 gene bootstraps. Predictors: PubMed before 2010 and now; genetic evidence before 2010 and any date; out-of-fold scores from the main experiment (each seed's test-set percentile, averaged over the seeds a gene was tested in). Also the odds ratio (Woolf CI, +0.5 correction) of success vs resolved failure for genetic evidence. On the time split, genetic- vs Minikel-trained twins are compared on selection and outcome among the test genes, paired, per graph and pooled with genes as clusters. |
+| `external_audit.csv` | Published top lists (§5.3). DrugnomeAI's top-5% genes (Tclin and Tier 1 models; Raies et al. 2022, Supplementary Data 1, fetched through Europe PMC) are mapped to the STRING universe by HGNC symbol. Each list, and its "novel" subset (not Minikel ≥ Phase III, not Pharos Tclin), is described by: share ≥ Phase III and Tclin; share in a programme; share in the top PubMed decile; share sharing a Pfam domain with another ≥ Phase III gene; share adjacent to one in STRING; share with genetic evidence; Pharos TDL. Reference rows of the same size: all genes, a PubMed ranker, and our RF's out-of-fold ranking (main experiment, random split). |
 | `time_split_coverage.csv` | Train / test / undated-launched / undated-Phase-III-only / no-programme genes, compared on study before 2010 and now, and on novelty relative to the targets known before 2010. |
 
 **Novelty strata.** Each future target is placed in strata by what was known before 2010:

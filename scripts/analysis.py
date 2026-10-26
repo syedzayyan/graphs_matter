@@ -72,6 +72,13 @@ tried_*.csv       success given tried (report 6.5). Genes by Minikel programme h
                   AUROC and the paired difference, per graph and pooled (genes as clusters).
 time_novelty_tuned.csv, tried_time_tuned.csv  the same as time_novelty / tried_time for
                   results/novelty_tuned (both labels retuned on the time split, tune_time.yaml).
+external_audit.csv  published top lists (report 5.3): DrugnomeAI's top-5% genes (Raies et al. 2022,
+                  Supplementary Data 1; fetch.py) on the STRING universe, all and "novel" (not
+                  Minikel >= Phase III, not Pharos Tclin). Shares: >= Phase III, Tclin, in a
+                  programme (preclinical-Phase II), top PubMed decile, sharing Pfam with / within
+                  1 hop (STRING) of another >= Phase III gene, genetic evidence, Pharos TDL.
+                  Reference rows: all genes, a PubMed ranker and our RF (results/main, random
+                  split, out-of-fold) with the same list size.
 topk_audit and phase_ladder need results/main, time_novelty and time_topk_audit
 results/novelty (the summarise job runs this after collecting them).
 
@@ -92,7 +99,7 @@ from sklearn.model_selection import StratifiedKFold
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from ghelps import data, ensure, features, labels, paths  # noqa: E402
+from ghelps import data, ensure, features, ids, labels, paths  # noqa: E402
 from ghelps.runner import AXES  # noqa: E402
 
 OUT = ROOT / "results" / "analysis"
@@ -436,6 +443,61 @@ def time_topk_audit(universe: str, genes: list[str], graph: str, cum: pd.DataFra
 
 
 # ---------------------------------------------------------------------------------------
+# Published top lists: what do other tools put at the top?
+
+EXTERNAL_UNIVERSE = "string"
+
+
+def external_audit(phase: pd.Series, pos_all: set) -> list[dict]:
+    f = paths.RAW / "external" / "drugnomeai_top5pct.tsv"
+    if not f.exists():
+        return []
+    u = EXTERNAL_UNIVERSE
+    genes = data.genes_of(u)
+    G = np.array(genes)
+    idx = {g: i for i, g in enumerate(genes)}
+    pos = np.isin(G, list(pos_all))
+    tdl = labels.pharos_tdl().reindex(genes).fillna("none").values
+    ph = phase.reindex(genes).fillna(0).values
+    pm = data.pubmed_counts(u).astype(float)
+    pct = rankdata(pm) / len(pm)
+    gen = np.isin(G, list(labels.genetic()))
+    pf = pd.read_parquet(paths.PROCESSED / "features" / u / "pfam.parquet").reindex(genes, fill_value=0).values > 0
+    fam_pos = pf.astype(np.int32).T @ pos.astype(np.int32)  # >= Phase III genes per domain
+    # shares a domain with another >= Phase III gene (a positive doesn't count itself)
+    shares = np.where(pos, (pf & (fam_pos >= 2)).any(1), (pf & (fam_pos >= 1)).any(1))
+    ei = np.load(paths.PROCESSED / "graphs" / u / f"{u}.real.npy")
+    adj = coo_matrix((np.ones(2 * len(ei)), (np.r_[ei[:, 0], ei[:, 1]], np.r_[ei[:, 1], ei[:, 0]])),
+                     shape=(len(genes),) * 2).tocsr()
+    near = np.asarray(adj @ pos.astype(float)).ravel() > 0  # a neighbour is a >= Phase III gene
+    novel = ~pos & (tdl != "Tclin")
+
+    def metrics(top: np.ndarray) -> dict:
+        return dict(n=len(top), frac_phase3=pos[top].mean(), frac_tclin=(tdl[top] == "Tclin").mean(),
+                    frac_in_programme=((ph[top] >= 1) & (ph[top] <= 3)).mean(),
+                    pubmed_pct_median=np.median(pct[top]), frac_top_pubmed_decile=(pct[top] >= 0.9).mean(),
+                    frac_shares_pfam_with_phase3=shares[top].mean(), frac_adjacent_to_phase3=near[top].mean(),
+                    frac_genetic=gen[top].mean(),
+                    **{f"frac_{t.lower()}": (tdl[top] == t).mean() for t in ("Tchem", "Tbio", "Tdark")})
+    ext = pd.read_csv(f, sep="\t")
+    ext["ensg"] = ids.map_symbols(ext.symbol).values
+    oof = _oof_scores("main", u, "minikel", "random", lambda r: (r.loss == "nnpu") & (r.model == "rf_feat")
+                      & r.feats.isin(["all", "attn_free"]))
+    rows = []
+    for name, d in ext.groupby("list", sort=False):
+        top = np.array(sorted({idx[g] for g in d.ensg.dropna() if g in idx}))
+        k = len(top)
+        refs = {"all genes": np.arange(len(genes)), "PubMed ranker": np.argsort(-pm, kind="stable")[:k]}
+        for (m, fe, c), ser in oof.items():
+            refs[f"RF ({fe}), ours"] = np.array([idx[g] for g in ser.sort_values(ascending=False).index[:k]])
+        for src, t in [(name, top), *refs.items()]:
+            for subset, m in (("all", t), ("novel", t[novel[t]])):
+                rows.append(dict(list=name, ranker=src, subset=subset, mapped=len(top), listed=len(d),
+                                 **metrics(m)))
+    return rows
+
+
+# ---------------------------------------------------------------------------------------
 # Success given tried: does what predicts the label predict selection or outcome?
 
 TRIED_BOOT = 2000
@@ -699,6 +761,7 @@ def main():
     first_drugged = labels.target_first_approval()
     launch = first_drugged[first_drugged.index.isin(pos_all)]
     cum = features.pubmed_by_year()
+    ext_audit = external_audit(phase, pos_all)
     for universe, members in CFG["universes"].items():
         genes = data.genes_of(universe)
         y = np.array([g in pos_all for g in genes], dtype=int)
@@ -758,7 +821,7 @@ def main():
                        ("phase_ladder", ladder), ("time_novelty", novelty), ("time_topk_audit", time_topk),
                        ("time_split_coverage", cover), ("tried_groups", tg), ("tried_auroc", tauc),
                        ("tried_genetic_or", tor), ("tried_time", time_tried(pd.concat([pd.DataFrame(), *ttime]))),
-                       ("time_novelty_tuned", novelty_tuned),
+                       ("time_novelty_tuned", novelty_tuned), ("external_audit", ext_audit),
                        ("tried_time_tuned", time_tried(pd.concat([pd.DataFrame(), *ttime_tuned])))):
         if not rows:
             continue

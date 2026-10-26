@@ -426,6 +426,29 @@ HuRI:
 
 {{ladder_huri}}
 
+### 5.3 Published top lists
+
+**Why this matters.** §5.1 audits our own models. The same question applies to tools in use: what do their published top lists contain? The rule is to audit published, downloadable top lists from genome-wide target or druggability models, with the same measures as §5.1. This is descriptive and was not pre-specified.
+- **DrugnomeAI** (Raies et al. 2022, *Commun Biol*, Supplementary Data 1) qualifies: its top 5% from the Tclin and Tier 1 models, 992 genes each.
+- **Varformer** (Wenteler et al. 2026, bioRxiv) is set aside. It releases model weights and variant scores but no gene-level ranking, and running it needs its per-gene population-variant inputs.
+
+Genes are mapped to the STRING universe ({{n:ext_dn_mapped}} of the Tclin list). "Novel" means not Minikel ≥ Phase III and not Pharos Tclin, i.e. the list's new predictions. Reference rows give, for the same list size: all genes (base rates), a PubMed-count ranker, and our RF (random split, Minikel label, nnPU, out-of-fold scores).
+- **Rediscovery:** {{n:ext_dn_phase3}} of DrugnomeAI-Tclin's top 5% are already ≥ Phase III.
+- **Its {{n:ext_dn_n}} novel predictions:**
+  - {{n:ext_dn_frac_in_programme}} are already in a drug programme (base rate {{n:ext_base_frac_in_programme}})
+  - {{n:ext_dn_frac_shares_pfam_with_phase3}} share a Pfam domain with a ≥ Phase III gene ({{n:ext_base_frac_shares_pfam_with_phase3}})
+  - {{n:ext_dn_frac_adjacent_to_phase3}} are adjacent to one in STRING ({{n:ext_base_frac_adjacent_to_phase3}})
+  - {{n:ext_dn_frac_tchem}} are Tchem, i.e. already have potent tool compounds ({{n:ext_base_frac_tchem}})
+- **The profile matches our all-features RF** ({{n:ext_rf_frac_in_programme}} in a programme, {{n:ext_rf_frac_shares_pfam_with_phase3}} Pfam, {{n:ext_rf_frac_adjacent_to_phase3}} adjacent). A published tool's "novel" targets look like what §5.1 found for models trained on the same kind of label: genes already in programmes, in drugged families, next to drugged genes.
+
+**Table 5.3a: DrugnomeAI-Tclin top 5%.**
+
+{{ext_tclin}}
+
+**Table 5.3b: DrugnomeAI-Tier1 top 5%.**
+
+{{ext_tier1}}
+
 ---
 
 ## 6. Time split: does the label find new targets?
