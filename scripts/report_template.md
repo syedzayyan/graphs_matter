@@ -711,6 +711,52 @@ HuRI:
 
 ---
 
+### 6.5 Success given tried: selection vs outcome
+
+**Why this matters.** The Phase ≥ III label mixes two things: which genes the industry chose to take into trials (*selection*), and which of those then worked (*outcome*). §4–§6 show that models predict the label mostly from study and family resemblance. This section asks whether that predictive power is about selection or about outcome. It also gives the genetic label of §6.4 an outcome that drug development did not choose.
+
+**Groups** (Minikel's target–indication pairs, summarised per gene):
+- **never tried:** no programme beyond preclinical
+- **tried:** best phase ≥ Phase I
+- **success:** best phase ≥ Phase III (exactly the Minikel label)
+- **resolved failure:** tried, best phase Phase I or II, and no programme still active. Genes whose best programme is still active at Phase I/II are censored and left out.
+
+**Contrasts** (AUROC, with 95% bootstrap CIs over genes, 2000 draws, paired between predictors):
+- **label:** success vs every other gene (what the benchmark scores)
+- **selection:** tried vs never tried
+- **outcome:** success vs resolved failure
+
+**Predictors:**
+- PubMed count before 2010 and now
+- genetic evidence before 2010 and at any date (binary)
+- out-of-fold model scores from the main experiment (random split, Minikel label, nnPU): each gene's percentile among the test genes, averaged over the seeds in which it was a test gene
+- on the time split, both labels' models (§6.4), scored on the test genes: outcome = future targets vs resolved failures, selection = tried vs never-tried test genes
+
+**How the outcome will be read (fixed before these results; see the git history of `scripts/report_template.md`).**
+- **R1. Is the label mostly selection?** For PubMed before 2010 and for RF with `all` and `attn_free` features: if outcome AUROC − 0.5 is less than half of selection AUROC − 0.5, the Phase ≥ III label mostly records which genes were tried. A benchmark built on it then mostly measures predicting the industry's choices. If outcome AUROC is close to selection AUROC, the label carries real outcome information and the portfolio critique has to be weakened.
+  - *Built-in bias:* successful drugs generate papers, and PubMed counts are not dated to before each trial. This pushes PubMed's outcome AUROC *up*, so a low value is conservative.
+- **R2. Does genetic evidence carry outcome signal?** Odds ratio for success vs resolved failure, for genetic evidence before 2010. If its CI is above 1, the genetic label carries outcome signal that drug selection alone doesn't explain. If the CI includes 1, there is no support at the gene level. Gene-level evidence is coarser than Minikel et al.'s indication-matched support, so this is a weak test.
+- **R3. Is the genetic label's §6.4 deficit about selection or outcome?** On the time split, paired genetic − Minikel AUROC, pooled over graphs, for RF and the GP with `attn_free` and `dated`:
+  - If the outcome CI includes or exceeds 0 while the selection CI is below 0, the deficit is consistent with a selection deficit: the genetic label loses at predicting which genes get tried, not which tried genes succeed.
+  - If the outcome CI is below 0 as well, the genetic-trained models are worse at both, and the genetic label is weaker, not only different.
+  - The time split has about 100 resolved failures pooled, so a CI that includes 0 is weak evidence by itself. The first branch needs the selection CI below 0 too.
+
+**Group sizes:**
+
+{{tried_groups}}
+
+**Table 6.5a: label, selection and outcome AUROC per predictor** (all genes of each universe; model rows use out-of-fold scores, random split, Minikel label, nnPU).
+
+{{tried_auroc}}
+
+**Table 6.5b: genetic evidence and success given tried**: odds ratio for success vs resolved failure, with 95% CI.
+
+{{tried_genetic_or}}
+
+**Table 6.5c: time split, genetic − Minikel, selection and outcome** (paired, pooled over graphs; per graph below).
+
+{{tried_time}}
+
 ## 7. Therapy-area waves
 
 **Setup:** train on targets never used in a therapy area; test on targets used only in it. Waves with fewer than 30 test genes on a graph are skipped, so HuRI has oncology only.
