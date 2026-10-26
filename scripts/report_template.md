@@ -35,6 +35,10 @@ A model that finds them is still imitating portfolio decisions, one decade later
 
 - **"Novel" here** means at least two of: below the top study decile in 2009, a Pfam family with no drugged member, ≥ 2 hops from a known target. That is {{n:novel2_n}} genes; the strict all-three definition gives only {{n:novel_n}}.
 - **Paired differences from the PubMed ranker,** with 95% bootstrap CIs over the future targets, are in Table 6.2h.
+- **What it means:**
+  - Pooled over graphs, RF with `dated` features puts half the novel future targets in its top 10%, against a quarter for the PubMed ranker (+0.26 [+0.11, +0.41]). So the models are not *only* re-ranking study.
+  - This is a low bar: the novel stratum is defined partly by low 2009 study and by new families, which handicaps the two simple rankers by construction.
+  - The gain is mostly on STRING and Reactome FI. On HuRI, among leak-free models only RF with `dated` features beats the PubMed ranker.
 
 **For the GNN question.** Effect sizes are mean AUROC differences over models with 95% hierarchical-bootstrap CIs (§2.3):
 - **Real graph vs no edges, same model:** {{n:eff_main_empty}} overall.
@@ -48,7 +52,10 @@ The graph clearly helps only in two cases:
 
 So the null result is about the task and its label, not the method.
 
-**What this does and doesn't show.** It shows that the Phase ≥ III label plus current features reward rediscovery. Whether a different label escapes the loop is tested in §6.4: the same time split, trained on human genetic evidence published before 2010. How each possible outcome will be read was fixed before those results came in.
+**What this does and doesn't show.** It shows that the Phase ≥ III label plus current features reward rediscovery. §6.4 tests whether a different label escapes the loop: the same time split, trained on human genetic evidence published before 2010, with the reading of each outcome fixed in advance.
+- **Result: outcome B by the pre-stated rule, but C's mechanism is visible.** The genetic label finds *fewer* novel future targets than the Minikel label on every primary comparison: {{n:primary_rf_feat_dated}} for RF with `dated` features, {{n:primary_gp_attn_free}} for the GP with `attn_free`. Over the whole ranking, its models follow 2009 study as closely as the Minikel ones.
+- **Its top picks are different genes.** Of RF's top 100, {{n:tk_rf_genetic_frac_shares_pfam_with_known}} share a Pfam domain with a 2009 target, against {{n:tk_rf_minikel_frac_shares_pfam_with_known}} for Minikel. They are less often already in a programme and less often top-decile studied. Only {{n:tk_rf_genetic_frac_future_target}} became drug targets, against {{n:tk_rf_minikel_frac_future_target}} (Table 6.4l).
+- **Reading:** the benchmark counts a hit only when a company later drugged the gene, so a label that leaves the portfolio loses by construction. This is evidence that the benchmark measures imitation, not that genetics finds worse targets. The features still add study bias on top of any label.
 
 ---
 
@@ -56,7 +63,7 @@ So the null result is about the task and its label, not the method.
 
 - **AUROC:** known targets ranked against unlabelled genes (PU setting). An unlabelled gene isn't a true negative, so AUROCs measure "ranks known targets high", not "finds targets".
 - **Cells in model tables:** `real / rewired / empty`, meaning the same model with the real graph, degree-preserving rewired copies (mean of 3), and no edges. "(no graph)" marks models that never use a graph. All values are means over 5 seeds.
-- **†** marks a model that never fit its own training data (training-fold AUROC < 0.6). That is a training failure, not a result. There are {{n:n_fit_fail}} such cells, all listed in Table 9.1.
+- **†** marks a model that never fit its own training data (training-fold AUROC < 0.6). That is a training failure, not a result. There are {{n:n_fit_fail}} such cells, all listed in Table 9.1. The flag doesn't apply to Correct & Smooth or label propagation (§9).
 - **`x [lo, hi]`:** a point estimate with its 95% bootstrap CI.
 - **Negative regimes:** each AUROC can use one of these negative sets:
   - **random:** all unlabelled test genes.
@@ -123,9 +130,9 @@ So the null result is about the task and its label, not the method.
 **Table 2.1a: nnPU, all features, random negatives.** `real / rewired / empty` per graph. The useful comparison is real vs empty *within a row*, which is the same model with and without edges. Comparing with a rewired graph overstates the graph's value, because a fake graph actively damages a model.
 
 What it shows:
-- **No model beats the GP or RF by much**, and RF uses no graph at all: 0.923 / 0.921 / 0.915.
-- **GAT and GCN are worse with the real graph than with no edges** on all three graphs: STRING GAT 0.877 vs 0.920, HuRI GAT 0.699 vs 0.868.
-- **Correct & Smooth gains on STRING (0.935 vs 0.912) and HuRI (0.850 vs 0.815); SIGN gains on STRING (0.924 vs 0.900).** Neither gains on Reactome FI.
+- **No model beats the GP or RF by much**, and RF uses no graph at all: 0.926 / 0.921 / 0.910 (GP 0.941 / 0.919 / 0.928).
+- **GAT and GCN are worse with the real graph than with no edges** on all three graphs: STRING GAT 0.882 vs 0.920, HuRI GAT 0.781 vs 0.868.
+- **Correct & Smooth gains on STRING (0.935 vs 0.912) and HuRI (0.850 vs 0.815); SIGN gains on STRING (0.916 vs 0.900).** Neither gains on Reactome FI (C&S 0.905 vs 0.919, SIGN 0.916 vs 0.918).
 
 {{main_compact_random_nnpu}}
 
@@ -163,6 +170,12 @@ What it shows:
 - `all`: {{n:rf_pfam_all}} (change {{n:rf_pfam_drop_all}})
 - `no_tract`: {{n:rf_pfam_no_tract}} (change {{n:rf_pfam_drop_no_tract}})
 - `attn_free`: {{n:rf_pfam_attn_free}} (change {{n:rf_pfam_drop_attn_free}})
+
+**Result: the first reading holds, for feature-only models.**
+- RF with `attn_free` features loses 0.07–0.09 when families are held out, against 0.005–0.018 with `all`. Without literature annotation, much of what RF learned was resemblance to drugged families.
+- It still reaches 0.72–0.76 on unseen families, so some signal does cross families. §8.2's "family membership alone carries most of the signal" stands, but not "all of it".
+- The MLP drops by similar amounts with every feature set, so the contrast is clearest for RF.
+- Graph models drop less with `attn_free` features (GP −0.018 / −0.024 / +0.016). With clean features they lean on the graph (§3.2), and the graph links a new family to known targets just as well.
 
 {{pfam_drop}}
 
@@ -222,11 +235,11 @@ What it shows:
 
 {{delong_main_contrast_loss}}
 
-**Table 2.3g: real vs empty per model and graph**: `better/worse of cells (mean Δ)`, over all feature sets, splits and losses. SIGN and GraphSAGE gain on STRING and HuRI. GCN and GAT lose on Reactome FI and HuRI.
+**Table 2.3g: real vs empty per model and graph**: `better/worse of cells (mean Δ)`, over all feature sets, splits and losses. Correct & Smooth gains most on STRING (23/0, +0.110) and not elsewhere. SIGN gains on STRING and HuRI, GraphSAGE on all three. GCN loses on Reactome FI and HuRI, GAT on Reactome FI, GAT + edge vec on Reactome FI and HuRI.
 
 {{delong_main_empty_model}}
 
-**Table 2.3h: every contrast under every negative regime.** Against 1-hop negatives (unlabelled direct neighbours of targets), the real graph is *worse* than the empty one (70 / 200). Message passing raises the neighbours of known targets, which is exactly the "linked to known targets" bias.
+**Table 2.3h: every contrast under every negative regime.** Against 1-hop negatives (unlabelled direct neighbours of targets), the real graph is *worse* than the empty one (65 better / 202 worse of 432). Message passing raises the neighbours of known targets, which is exactly the "linked to known targets" bias.
 
 {{delong_main_regimes}}
 
@@ -239,7 +252,7 @@ What it shows:
 ### 2.4 Under harder negatives
 
 **Table 2.4: AUROC by evaluation-negative regime** (random split, nnPU, all features; feature-only models with no graph, graph models with the real graph).
-- Every model drops sharply against PubMed-matched negatives (STRING RF 0.923 → 0.842) and against same-family negatives (→ 0.785).
+- Every model drops sharply against PubMed-matched negatives (STRING RF 0.926 → 0.840) and against same-family negatives (→ 0.789).
 - 1-hop neighbours of targets are the hardest negatives for graph models (STRING C&S 0.795).
 
 {{main_regimes}}
@@ -373,9 +386,9 @@ Reference rows: `all test unlabelled` gives the base rates; `pubmed_only` is a P
 
 **How to read it (STRING):**
 - **Base rates:** 8% of genes are in the top study decile, 12% in a programme, 32% share Pfam with a known target, 42% sit within 1 hop of one.
-- **All-features models:** their top 100 are 24–42% top-decile, 56–67% already in programmes, 64–72% Pfam-sharing, and 82–96% adjacent to a known target.
-- **Switching to `attn_free` (RF):** top-decile share falls to 12%, but the Pfam-sharing share rises to 91%. The bias moves from study to family.
-- **Adding the STRING graph to `attn_free`:** top-decile share climbs back to 28–40%, and 92–95% of top picks are adjacent to known targets.
+- **All-features models:** their top 100 (nnPU) are 27–43% top-decile, 56–68% already in programmes, 65–75% Pfam-sharing, and 84–97% adjacent to a known target.
+- **Switching to `attn_free` (RF):** top-decile share falls to 12%, but the Pfam-sharing share rises to 93%. The bias moves from study to family.
+- **Adding the STRING graph to `attn_free`:** top-decile share climbs back to 29–40% (C&S, GCN, GP), and 91–95% of top picks are adjacent to known targets.
 
 STRING:
 
@@ -507,6 +520,14 @@ HuRI:
 
 **Table 6.2h: the same, minus the PubMed-before-2010 ranker.** A model finds more novel targets than study alone only where the CI is above 0.
 
+What it shows (pooled column):
+- **`all` features:** every model beats the PubMed ranker except the study-matched C&S and GCN (+0.16 to +0.37 for nnPU). These features leak post-2010 knowledge.
+- **`dated` features:** +0.15 to +0.26 for nnPU, with CIs at or above 0 (RF +0.26 [+0.11, +0.41]; GCN's lower bound is +0.00).
+- **`attn_free` features:** +0.12 to +0.16, with every CI touching 0.
+- **By graph:** the gains come from STRING (all CIs above 0) and mostly Reactome FI. On HuRI, only RF with `dated` (+0.24 [+0.02, +0.46]) and the leaky `all` models other than GCN beat the ranker.
+- **Study-matched training (`pn_pubmed`) doesn't help here:** RF `dated` falls from 0.50 to 0.39 recall.
+- **Caveat:** "novel (2 of 3)" partly means "not top-decile in 2009", so the PubMed ranker is handicapped by construction. Beating it is a floor, not evidence of discovery.
+
 {{novelty_vs_pubmed_recall_top10pct_novel2}}
 
 **Table 6.2i: AUROC, novel (2 of 3).**
@@ -529,11 +550,11 @@ HuRI:
 
 {{novelty_head_time_nnpu_all}}
 
-**Table 6.3b: time split, nnPU, attention-free features.** On STRING the real graph adds a lot to graph models, but on HuRI it doesn't. The literature graph supplies what the clean features lack, and §6.2 shows that what it supplies is proximity to known targets.
+**Table 6.3b: time split, nnPU, attention-free features.** On STRING the real graph adds a lot to graph models (C&S 0.892 vs 0.763 empty, GCN 0.867 vs 0.764), but on HuRI it doesn't (C&S 0.708 vs 0.752). The literature graph supplies what the clean features lack, and §6.2 shows that what it supplies is proximity to known targets.
 
 {{novelty_head_time_nnpu_attn_free}}
 
-**Table 6.3c: time split, nnPU, `dated` features** (only what was known in 2009).
+**Table 6.3c: time split, nnPU, `dated` features** (only what was known in 2009). RF alone reaches 0.904 / 0.891 / 0.896. Only the GP matches it, and only on STRING (0.905). The STRING graph still helps graph models (C&S 0.891 vs 0.834 empty), but less than with `attn_free`. On Reactome FI and HuRI the empty graph is usually better.
 
 {{novelty_head_time_nnpu_dated}}
 
@@ -552,6 +573,9 @@ HuRI:
 {{novelty_regimes_time_dated}}
 
 **Table 6.3f: effect sizes, novelty experiment** (hierarchical bootstrap, as in Table 2.3a). DeLong counts by split and feature set follow as a supplement.
+- **Real vs empty on the time split:** -0.004 [-0.029, +0.022]. By feature set: `attn_free` +0.021 [-0.001, +0.041], `dated` -0.013 [-0.041, +0.017].
+- **Graph model vs RF:** -0.052 [-0.085, -0.021] with `dated` features.
+- **Genetic vs Minikel label, overall AUROC:** -0.127 [-0.157, -0.091]. The genetic-trained twin is worse in 200 of 216 cells and better in none. That matches the smoke test (−0.11 to −0.14), which is why overall AUROC is not the §6.4 endpoint.
 
 {{effects_novelty}}
 
@@ -604,7 +628,28 @@ Both labels are scored on exactly the same test genes, so they can be compared w
 - GP, `attn_free`: {{n:primary_gp_attn_free}}
 - GP, `dated`: {{n:primary_gp_dated}}
 
-**Supporting:** genetic − Minikel in Spearman(score, PubMed 2009) ranges from {{n:rho_shift}} across models, feature sets and graphs.
+**Supporting:** genetic − Minikel in Spearman(score, PubMed 2009) ranges from {{n:rho_shift}} across models, feature sets and graphs. For the four primary models, pooled over graphs, it is −0.03 to +0.05:
+
+| model | genetic | Minikel | genetic − Minikel |
+|---|---|---|---|
+| RF, `attn_free` | +0.23 | +0.21 | +0.01 |
+| RF, `dated` | +0.53 | +0.56 | −0.03 |
+| GP, `attn_free` | +0.41 | +0.38 | +0.02 |
+| GP, `dated` | +0.47 | +0.43 | +0.05 |
+
+The extreme values in the full range come from cells outside the primary endpoint (MLP with `all` features on HuRI, −0.61; GP with `all` features on HuRI, +0.29).
+
+**Result: outcome B by the rule fixed in advance, but the top of the ranking shows outcome C's mechanism, and this benchmark can't separate the two.**
+- **All four primary CIs are below 0.** The genetic label puts fewer novel future targets in its top 10% than the Minikel label, by 0.15 to 0.28.
+- **Over the whole ranking, the genetic-trained models follow 2009 study as closely as the Minikel-trained ones** (Spearman above), although the label itself is much less study-biased (PubMed AUROC {{n:lb_genetic_T_auroc}} vs {{n:lb_minikel_auroc}}). By the pre-stated rule this is outcome B.
+- **At the top of the ranking, the two labels pick different genes** (Table 6.4l). For RF's top 100, genetic vs Minikel, STRING / Reactome FI / HuRI:
+  - sharing a Pfam domain with a 2009 target: {{n:tk_rf_genetic_frac_shares_pfam_with_known}} vs {{n:tk_rf_minikel_frac_shares_pfam_with_known}} (base rate {{n:tk_base_frac_shares_pfam_with_known}})
+  - in a drug programme today (preclinical–Phase II): {{n:tk_rf_genetic_frac_in_programme}} vs {{n:tk_rf_minikel_frac_in_programme}} (base rate {{n:tk_base_frac_in_programme}})
+  - in the top study decile of 2009: {{n:tk_rf_genetic_frac_top_pubmed_decile_T}} vs {{n:tk_rf_minikel_frac_top_pubmed_decile_T}} (base rate {{n:tk_base_frac_top_pubmed_decile_T}})
+  - with genetic evidence before 2010: {{n:tk_rf_genetic_frac_genetic_before_T}} vs {{n:tk_rf_minikel_frac_genetic_before_T}} (base rate {{n:tk_base_frac_genetic_before_T}})
+  - future targets: {{n:tk_rf_genetic_frac_future_target}} vs {{n:tk_rf_minikel_frac_future_target}} (base rate {{n:tk_base_frac_future_target}})
+- **So the genetic label largely leaves the drugged families, and somewhat leaves the studied and already-investigated genes.** Its top picks are disease genes, and companies mostly did not go on to drug them. That is outcome C's mechanism. Spearman is computed over all test genes, so it can't show a change at the top. Its picks are still more studied than the base rate, so the features do pull study bias back in (the part of B that holds).
+- **What this means for the question.** A hit here is a gene a company later took to Phase III. A label that points away from the portfolio is wrong by construction on this benchmark, whether or not its genes are good targets. §6.4 therefore can't show that genetics generalises worse to new targets. What it shows is that the benchmark rewards imitating the portfolio, and that every label picks up some study bias from the features. Testing whether genetics finds *better* targets needs an outcome not chosen by drug development, such as success given that a trial started.
 
 **Table 6.4b: time split, nnPU, genetic label** (`real / rewired / empty`). Compare with Tables 6.3a–b, which are trained on the Minikel label.
 
@@ -660,6 +705,10 @@ HuRI:
 
 {{genetic_delong_model}}
 
+**Table 6.4l: what each label's models rank highest on the time split.** The top 100 test genes (future targets plus never-drugged genes) per run, mean over seeds; nnPU, RF and the GP, leak-free feature sets. Columns: share that are future targets (first drugged from 2010 on), novel (2 of 3) future targets, in the top PubMed decile before 2010, in a drug programme today (Minikel preclinical–Phase II; no dates, so some programmes began after 2010), sharing a Pfam domain with a target drugged before 2010, within 1 hop of one in the real graph, and with genetic evidence published before 2010. A gene with pre-2010 genetic evidence can be a test gene, because the time split's test genes are drawn without regard to the genetic label.
+
+{{genetic_topk}}
+
 ---
 
 ## 7. Therapy-area waves
@@ -667,12 +716,12 @@ HuRI:
 **Setup:** train on targets never used in a therapy area; test on targets used only in it. Waves with fewer than 30 test genes on a graph are skipped, so HuRI has oncology only.
 
 **Table 7.1a: AUROC per wave, nnPU, all features.**
-- RF transfers well across waves (0.85–0.93), better than the graph models.
+- RF and the GP transfer well across waves (RF 0.85–0.94, GP 0.82–0.95), better than the message-passing models.
 - GAT and GCN are worse with the real graph than with none in every wave.
 
 {{waves_all}}
 
-**Table 7.1b: the same with attention-free features.** Transfer drops (RF 0.66–0.82), most for oncology. Here the STRING graph helps graph models (C&S 0.80–0.84 vs 0.67–0.76 empty). That's the same re-injection as §6.3.
+**Table 7.1b: the same with attention-free features.** Transfer drops (RF 0.65–0.82), most for oncology. Here the STRING graph helps graph models (C&S 0.80–0.84 vs 0.67–0.76 empty). That's the same re-injection as §6.3.
 
 {{waves_attn_free}}
 
@@ -682,7 +731,6 @@ HuRI:
 
 {{delong_waves_contrast_feats}}
 
-![STRING waves](results/figures/waves/string/1_conditions.png)
 
 ---
 
@@ -692,13 +740,13 @@ HuRI:
 
 **Setup:** label = GO membrane or plasma membrane; features = Pfam and pathways only (no GO, no tractability, so localisation isn't handed to the model).
 
-**Table 8.1a: AUROC, random split, nnPU** (`real / rewired / empty`). Graph models beat their empty-graph versions on most graphs. On HuRI: SIGN 0.833 vs 0.782, GraphSAGE 0.818 vs 0.770.
+**Table 8.1a: AUROC, random split, nnPU** (`real / rewired / empty`). Graph models mostly beat their empty-graph versions on STRING and HuRI (HuRI SIGN 0.824 vs 0.782, GraphSAGE 0.817 vs 0.770). On Reactome FI the empty graph is usually as good or better in this cell (C&S 0.826 vs 0.849); Table 8.1b pools all losses and splits.
 
 {{membrane_head_random_nnpu}}
 
 **Table 8.1b: DeLong.**
-- **Real beats empty in 55 of 72 cells (+0.047)** and loses in 7, compared with roughly a draw on drug targets.
-- **Per model, every model gains on STRING and HuRI.**
+- **Real beats empty in 50 of 72 cells (+0.043)** and loses in 11, compared with roughly a draw on drug targets.
+- **Per model, every model has a positive mean gain on STRING and HuRI.** Reactome FI is mixed (2/2 for most models).
 
 The pipeline can show a graph effect when the label follows the network.
 
@@ -724,21 +772,21 @@ The pipeline can show a graph effect when the label follows the network.
 
 {{nl_minikel_famperm}}
 
-**Table 8.2c: DeLong by label set.** No graph gain on either: real vs empty is 0 / 2 and 4 / 10.
+**Table 8.2c: DeLong by label set.** No graph gain on either: real vs empty is 0 / 2 (shuffled across all genes) and 4 / 11 (within families).
 
 {{delong_nonsense_labels_contrast_labels}}
 
 ### 8.3 Random features
 
 **Table 8.3a: node features replaced by Gaussian noise.**
-- **Without a graph,** models are at chance (0.46–0.51).
-- **With the real STRING graph,** graph models reach 0.69–0.89 (C&S 0.886, GAT 0.870), and Reactome FI up to 0.82. On HuRI they stay at 0.47–0.60.
+- **Without a graph,** models are at chance (0.47–0.50).
+- **With the real STRING graph,** graph models reach 0.53–0.89 (C&S 0.886, GAT 0.869; GCN lowest at 0.533), and on Reactome FI up to 0.81. On HuRI they stay at 0.47–0.59.
 
 The literature graph *alone* carries the label, through study-correlated topology.
 
 {{nf_random}}
 
-**Table 8.3b: DeLong.** Real beats empty 32 / 0, and beats RF 49 / 0 (RF has only noise).
+**Table 8.3b: DeLong.** Real beats empty 32 / 0 (+0.168), and beats RF 48 / 0 (RF has only noise).
 
 {{delong_nonsense_feats_contrast}}
 
@@ -757,9 +805,10 @@ The literature graph *alone* carries the label, through study-correlated topolog
   - Minikel positives with no ChEMBL approval date are excluded from the time split. They resemble the test targets in study and novelty (§6.0).
   - Paper years come from a monotone PMID → entry-year fit. Back-indexed papers get later years, which can only *understate* early study.
 - **"Attention-free" is relative:** it removes literature annotation, not study bias (ρ ≈ 0.6 with PubMed, §4.3).
-- **Tuning:** done once per graph, model, loss and graph condition, on the random split with Minikel labels and all features, then reused for other feature sets and splits. RF on STRING hit the tuning time limit (11 trials).
-  - Settings chosen on the random split occasionally fail elsewhere. Example: Correct & Smooth with the empty HuRI graph was tuned to a logistic-regression base with nnPU prior 0.018. That trains on the random split but never fits on the Pfam split (training AUROC ≈ 0.5).
+- **Tuning:** done once per graph, model, loss and graph condition, on the random split with Minikel labels and all features, then reused for other feature sets and splits. RF on STRING with nnPU hit the tuning time limit (12 trials).
+  - Settings chosen on the random split occasionally fail elsewhere. Example: Correct & Smooth with the empty HuRI graph was tuned to a logistic-regression base with nnPU prior 0.018. That base model trains on the random split but never fits on the Pfam split (its training AUROC is 0.46–0.57, checked by hand), so the cell scores 0.494.
   - Such cells are marked † and listed in Table 9.1, not dropped.
+  - **The flag can't see this case.** Correct & Smooth and label propagation reset training genes to their true labels, so their final training-fold AUROC is always about 1. A failed C&S base model shows up only as a test AUROC near 0.5, as in HuRI's empty-graph Pfam cells (0.49–0.52 with nnPU).
 - **HuRI** covers only 32% of targets, and its pathway subgraph is nearly empty (832 edges).
 
 **Table 9.1: model cells that never fit their training data** (training-fold AUROC < 0.6, random negatives; shuffled-label and random-feature controls excluded, where failing to fit is expected).

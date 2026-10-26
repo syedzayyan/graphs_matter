@@ -508,6 +508,39 @@ def genetic_endpoints(nv):
     num("rho_shift", f"{w['genetic − minikel'].min():+.2f} to {w['genetic − minikel'].max():+.2f}")
 
 
+TK_COLS = {"frac_future_target": "future target", "frac_novel_future": "novel future target",
+           "frac_top_pubmed_decile_T": "top study decile 2009", "frac_in_programme": "in a programme today",
+           "frac_shares_pfam_with_known": "Pfam with a 2009 target",
+           "frac_within_1hop_of_known": "1 hop from a 2009 target",
+           "frac_genetic_before_T": "genetic evidence pre-2010"}
+
+
+def genetic_topk():
+    """§6.4: the top-100 test genes of each label's primary models on the time split."""
+    t = pd.read_csv(A / "time_topk_audit.csv")
+    ref = t[t["labels"] == "-"].copy()
+    ref["model"] = ref.model.map({"all test genes": "all test genes (base rate)", "pubmed_before_T": "PubMed 2009"})
+    run = t[t.model.isin(PRIMARY["models"]) & t.feats.isin(PRIMARY["feats"]) & t["labels"].isin(["minikel", "genetic"])
+            & t["copy"].isin(["real", "none"])].copy()
+    run["_o"] = [(PRIMARY["models"].index(r.model), r.feats, r.labels != "minikel") for r in run.itertuples()]
+    run = run.sort_values("_o")
+    run["model"] = [f"{MN[r.model]} `{r.feats}`, {'Minikel' if r.labels == 'minikel' else 'genetic'}"
+                    for r in run.itertuples()]
+    rows = []
+    for u in U:
+        x = pd.concat([ref[ref.universe == u], run[run.universe == u]])
+        rows.append(x.assign(universe=UN[u])[["universe", "model", *TK_COLS]])
+    tab = pd.concat(rows).rename(columns=TK_COLS)
+    put("genetic_topk", tab.map(lambda v: f"{v:.0%}" if isinstance(v, float) else v), index=False)
+    for c in TK_COLS:
+        num(f"tk_base_{c}", nums3([ref[(ref.universe == u) & (ref.model.str.startswith("all"))][c].iloc[0] for u in U],
+                                  "{:.0%}"))
+        for lab in ("minikel", "genetic"):
+            v = [run[(run.universe == u) & (run["labels"] == lab) & (run.model.str.startswith("RF"))][c] for u in U]
+            span = lambda x: "–".join(dict.fromkeys(f"{w:.0%}" for w in (x.min(), x.max())))  # noqa: E731
+            num(f"tk_rf_{lab}_{c}", " / ".join(span(x) for x in v))
+
+
 def genetic_delong():
     d = delong("novelty")
     d = d[(d.contrast == "vs_minikel_label") & (d.regime == "random")]
@@ -546,8 +579,8 @@ def control_tables():
 
 
 SECTIONS = [setup, fit_failures, main_tables, pfam_tables, delong_tables, effect_tables, feature_tables,
-            analysis_tables, label_bias, coverage_table, discovery_tables, gp_table, novelty_tables, genetic_delong,
-            waves_tables, control_tables]
+            analysis_tables, label_bias, coverage_table, discovery_tables, gp_table, novelty_tables, genetic_topk,
+            genetic_delong, waves_tables, control_tables]
 
 
 def main():

@@ -49,8 +49,17 @@ time_novelty.csv  time split (results/novelty, split "time"): trained on targets
                   Reference rankers: PubMed before 2010, PubMed now (leaks the future), number
                   of known targets sharing a Pfam domain, and closeness to known targets. Runs
                   trained on the genetic label (same folds and test genes) appear with labels=genetic.
-topk_audit and phase_ladder need results/main, time_novelty results/novelty (the summarise
-job runs this after collecting them).
+time_topk_audit.csv  time split: what does each label's model rank highest? Per run of
+                  results/novelty (split "time", nnpu; feature sets all / attn_free / dated;
+                  real / no graph), the top-100 test genes (future targets + never-drugged
+                  genes): share that are future targets, novel (2 of 3) future targets, PubMed
+                  percentile before 2010 and share in that top decile, share in a drug programme
+                  today (Minikel preclinical-Phase II), share sharing a Pfam domain with / within
+                  1 hop of a target drugged before 2010, and share with genetic evidence before
+                  2010 / at any date. Reference rows "all test genes" (base rates) and
+                  "pubmed_before_T". Mean over seeds.
+topk_audit and phase_ladder need results/main, time_novelty and time_topk_audit
+results/novelty (the summarise job runs this after collecting them).
 
 Uses $GHELPS_DATA, so on the cluster it describes exactly the data the runs used.
 """
@@ -364,6 +373,52 @@ def time_novelty_genes(universe: str, genes: list[str], graph: str, cum: pd.Data
     return g.merge(strata.reset_index(names="pos"), on="pos").drop(columns="pos").assign(universe=universe, graph=graph)
 
 
+def time_topk_audit(universe: str, genes: list[str], graph: str, cum: pd.DataFrame, phase: pd.Series) -> list[dict]:
+    """Top-100 test genes of each time-split run: are they future targets, previously investigated
+    genes, members of drugged families, or genetic-evidence genes? See the module docstring."""
+    f = ROOT / "results" / NOVELTY_EXP / "results.csv"
+    if not f.exists():
+        return []
+    runs = pd.read_csv(f, usecols=["run_id", *AXES]).drop_duplicates("run_id")
+    runs["copy"] = runs["copy"].fillna("none")
+    runs = runs[(runs.universe == universe) & (runs.split == "time") & runs["copy"].isin(["real", "none"])
+                & (runs.loss == "nnpu") & runs.feats.isin(["all", "attn_free", "dated"])]
+    if runs.empty:
+        return []
+    T = CFG["splits"]["time_split_year"]
+    G = np.array(genes)
+    pm_T = cum.reindex(genes, fill_value=0)[T - 1].values.astype(float)
+    pct_T = rankdata(pm_T) / len(pm_T)
+    fut_idx, strata, fam_known, hops = _future_context(universe, genes, graph, pm_T)
+    fut, novel = np.zeros(len(genes), bool), np.zeros(len(genes), bool)
+    fut[fut_idx], novel[fut_idx] = True, strata["novel (2 of 3)"].values
+    ph = phase.reindex(genes).fillna(0).values
+    gen_T, gen_any = np.isin(G, list(labels.genetic(before=T))), np.isin(G, list(labels.genetic()))
+
+    def metrics(top):
+        return dict(frac_future_target=fut[top].mean(), frac_novel_future=novel[top].mean(),
+                    pubmed_T_pct_median=np.median(pct_T[top]), frac_top_pubmed_decile_T=(pct_T[top] >= 0.9).mean(),
+                    frac_in_programme=((ph[top] >= 1) & (ph[top] <= 3)).mean(),
+                    frac_shares_pfam_with_known=(fam_known[top] > 0).mean(),
+                    frac_within_1hop_of_known=(hops[top] <= 1).mean(),
+                    frac_genetic_before_T=gen_T[top].mean(), frac_genetic_any=gen_any[top].mean())
+    out = []
+    for seed, rs in runs.groupby("seed"):
+        sp = pd.read_parquet(paths.PROCESSED / "splits" / universe / "minikel" / "time" / f"seed{seed}.parquet")
+        test = np.flatnonzero(sp.fold.values == "test")
+        ref = dict(seed=seed, labels="-", copy="none", feats="-", loss="-")
+        out.append(dict(**ref, model="all test genes", **metrics(test)))
+        out.append(dict(**ref, model="pubmed_before_T", **metrics(test[np.argsort(-pm_T[test], kind="stable")[:TOP_K]])))
+        for r in rs.itertuples():
+            sf = ROOT / "results" / NOVELTY_EXP / "scores" / f"{r.run_id}.npy"
+            if sf.exists():
+                s = np.load(sf).astype(float)[test]
+                out.append(dict(seed=seed, labels=r.labels, copy=r.copy, feats=r.feats, model=r.model, loss=r.loss,
+                                **metrics(test[np.argsort(-s, kind="stable")[:TOP_K]])))
+    return (pd.DataFrame(out).groupby(NOVELTY_KEY, sort=False).mean(numeric_only=True).drop(columns="seed")
+            .reset_index().assign(universe=universe, graph=graph).to_dict("records"))
+
+
 def _boot_means(v: np.ndarray, cluster: np.ndarray, counts: np.ndarray) -> np.ndarray:
     """Bootstrap means of v resampling clusters (genes): counts is (B, n_clusters) multinomial."""
     s = np.bincount(cluster, weights=v, minlength=counts.shape[1])
@@ -475,7 +530,7 @@ def main():
     pos_all = labels.minikel(CFG["labels"]["minikel_min_phase"])
     membrane = labels.membrane()
     sizes, hubs, mem, med, prior, audit, ladder, leak, lbias, cover = [], [], [], [], [], [], [], [], [], []
-    novelty_genes = []
+    novelty_genes, time_topk = [], []
     phase = labels.minikel_best_phase()
     first_drugged = labels.target_first_approval()
     launch = first_drugged[first_drugged.index.isin(pos_all)]
@@ -521,6 +576,7 @@ def main():
             audit += a
             ladder += l
             novelty_genes.append(time_novelty_genes(universe, genes, graph, cum))
+            time_topk += time_topk_audit(universe, genes, graph, cum, phase)
             cover += time_split_coverage(universe, genes, graph, cum, first_drugged, phase, pos_all)
     ng = pd.concat(novelty_genes, ignore_index=True) if novelty_genes else pd.DataFrame()
     novelty = time_novelty(ng) + time_novelty(ng, pooled=True)
@@ -528,7 +584,8 @@ def main():
         ng.to_csv(OUT / "time_novelty_genes.csv.gz", index=False)
     for name, rows in (("graph_sizes", sizes), ("hub_bias", hubs), ("membrane", mem), ("mediation", med),
                        ("prior_study", prior), ("study_leak", leak), ("label_bias", lbias), ("topk_audit", audit),
-                       ("phase_ladder", ladder), ("time_novelty", novelty), ("time_split_coverage", cover)):
+                       ("phase_ladder", ladder), ("time_novelty", novelty), ("time_topk_audit", time_topk),
+                       ("time_split_coverage", cover)):
         if not rows:
             continue
         t = pd.DataFrame(rows)
