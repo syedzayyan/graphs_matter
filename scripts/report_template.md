@@ -924,6 +924,8 @@ The literature graph *alone* carries the label, through study-correlated topolog
   - `attn_free` and `dated` features and HuRI are leak-free. Two exceptions: `dated` uses today's Pfam domain assignments (sequence-derived, but some families were defined after 2009), and GTEx expression (in both sets) was measured after 2010, though uniformly for every gene.
   - Matching uses pre-2010 PubMed counts.
 - **Small novel strata:** the strict `novel` stratum has {{n:novel_n}} genes, so every stratified number comes with a bootstrap CI over the targets (Tables 6.2g–l, 6.4i). Conclusions rest on the 2-of-3 definition ({{n:novel2_n}}; {{n:novel2_n_pooled}} pooled).
+- **The target bootstrap leaves out seed and negative-draw variance.** Both are averaged out before resampling, so the §6 CIs are somewhat too narrow, and CIs that only just exclude 0 deserve less weight. The same holds for §6.5.
+- **Novel strata handicap the PubMed ranker by construction:** they are partly defined by low 2009 study. So "beats PubMed on novel targets" (§6.2) is a low bar, and it is reported as a secondary result.
 - **Dating:**
   - First-drugged year is the first approval of a drug acting on the gene in ChEMBL (single proteins and complexes).
   - Minikel positives with no ChEMBL approval date are excluded from the time split. They resemble the test targets in study and novelty (§6.0).

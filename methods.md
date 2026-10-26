@@ -466,6 +466,18 @@ For each contrast, the effect size is the mean AUROC difference, using random ne
 
 **Supporting statistic:** `rho_pubmed_T`, the Spearman correlation of a run's test-gene scores with PubMed counts before 2010, averaged over seeds.
 
+**What the CI leaves out.** Seed-to-seed training variation and the random draw of test negatives are averaged out before bootstrapping, so neither is in the interval. The CIs in §6 are therefore somewhat too narrow. The same holds for the §6.5 gene bootstraps.
+
+### 10.4 Benchmark release (`scripts/export_benchmark.py`, `benchmark/`)
+
+The time-split benchmark is exported as plain TSVs, one folder per universe:
+- genes with study, programme status, genetic evidence and novelty context
+- the five evaluation seeds' folds with both training labels
+- the future targets with their strata
+- the graphs as ENSG pairs, BioGRID 2009 included
+
+`benchmark/evaluate.py` is a standalone scorer for any gene ranking. It reports the §6 novelty endpoints with target-bootstrap CIs and paired PubMed differences, the top-100 audit, and selection and outcome AUROC. Run on this repository's RF with `dated` features on STRING, it reproduces `time_novelty.csv`'s AUROC and recall in every stratum exactly. The CI bounds differ in the third decimal because the bootstrap draws differ.
+
 ---
 
 ## 11. Descriptive analyses (`scripts/analysis.py`)
