@@ -1,0 +1,18 @@
+# Is the STRING graph's contribution on the time split post-2010 knowledge? The same time-split
+# runs on three graphs over the STRING universe's genes (report 6.3, "A dated graph"):
+#   string        STRING v12 (current; leaks post-2010 literature and experiments)
+#   biogrid09     BioGRID 2.0.60, Dec 2009, physical interactions (configs/data.yaml)
+#   string_sub09  STRING's own edges sampled down to biogrid09's edge count (density control)
+# Minikel label, nnPU, leak-free feature sets. Hyperparameters: STRING's tuned params
+# (tuned per universe and graph condition, not per graph).
+name: dated_graph
+grid:
+  universe: [string]
+  graph: [string, biogrid09, string_sub09]
+  copy: [real, rw0, empty]
+  labels: [minikel]
+  feats: [attn_free, dated]
+  split: [time]
+  seed: [0, 1, 2, 3, 4]
+  model: [deg_lr, rf_struct, labelprop, mlp_feat, rf_feat, sign_feat, cs_feat, gcn_feat, gat_feat, gp]
+  loss: [nnpu]

@@ -18,6 +18,19 @@ graphs:
     # Reactome FI naive-Bayes predictions); pairs with curated support are kept.
     include_predicted: false
   huri: {}
+  biogrid09:
+    # BioGRID 2.0.60 (27 Dec 2009): a graph as known before the time split's cut-off.
+    # Physical systems only (genetic-interaction and RNA systems dropped).
+    physical_systems: ["Affinity Capture-Western", "Two-hybrid", "Reconstituted Complex", "Affinity Capture-MS",
+                       "Biochemical Activity", "Co-purification", "Affinity Capture-Luminescence",
+                       "Co-crystal Structure", "Far Western", "Co-fractionation", "Protein-peptide",
+                       "Co-localization", "FRET", "PCA"]
+  string_sub09:
+    # Density control for biogrid09: the STRING graph's own edges, a uniform random sample of
+    # as many as biogrid09 has on the same genes. Separates "sparser" from "dated".
+    sample_from: string
+    match_edges_of: biogrid09
+    seed: 0
 
 rewire:
   n_copies: 3
@@ -36,6 +49,11 @@ universes:
   string: [string]
   reactome_fi: [reactome_fi]
   huri: [huri]
+
+# Dated graphs (scripts/build_dated_graphs.py): extra graphs built on an existing universe's
+# genes, without changing it. Genes absent from the dated graph are isolated nodes.
+dated_graphs:
+  string: [biogrid09, string_sub09]   # in build order: the control matches biogrid09
 
 # Pathway-coherent subgraph (graph condition "pwsub"): keep only edges whose endpoints share
 # a specific Reactome pathway. Removes cross-module edges without breaking modules apart.

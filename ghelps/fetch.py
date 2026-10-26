@@ -28,6 +28,8 @@ MINIKEL = "https://raw.githubusercontent.com/ericminikel/genetic_support/main/da
 INTACT_HUMAN = "https://ftp.ebi.ac.uk/pub/databases/intact/current/psimitab/species/human.zip"
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 HURI = "https://interactome-atlas.org/data/HuRI.tsv"  # the www. host has a mismatched TLS cert
+BIOGRID_2009 = ("https://downloads.thebiogrid.org/Download/BioGRID/Release-Archive/BIOGRID-2.0.60/"
+                "BIOGRID-ORGANISM-2.0.60.tab.zip")  # released 27 Dec 2009: the dated graph
 
 
 def _retry(fn, what: str, attempts: int = 5):
@@ -203,6 +205,26 @@ def _intact_slim(dest: Path) -> None:
     z.unlink()
 
 
+def _biogrid_2009(dest: Path) -> None:
+    """BioGRID 2.0.60 (Dec 2009), human-human rows: Entrez ids A/B, experimental system, PubMed id."""
+    z = dest.parent / "biogrid_2.0.60_organism.zip"
+    if not z.exists():
+        _download(BIOGRID_2009, z)
+    tmp = dest.with_suffix(".part")
+    with zipfile.ZipFile(z) as zf, zf.open("BIOGRID-ORGANISM-Homo_sapiens-2.0.60.tab.txt") as fh, open(tmp, "w") as out:
+        lines = io.TextIOWrapper(fh, encoding="utf-8", errors="replace")
+        for line in lines:  # free-text preamble, then the column header
+            if line.startswith("INTERACTOR_A"):
+                break
+        out.write("entrez_a\tentrez_b\tsystem\tpmid\n")
+        for line in lines:
+            c = line.rstrip("\n").split("\t")
+            if len(c) >= 11 and c[9] == "9606" and c[10] == "9606":
+                out.write("\t".join((c[0].removeprefix("ETG"), c[1].removeprefix("ETG"), c[6], c[8])) + "\n")
+    tmp.rename(dest)
+    z.unlink()
+
+
 def _ot_dataset(name: str):
     def fetch(dest: Path) -> None:
         listing = urllib.request.urlopen(f"{OT}/{name}/", timeout=120).read().decode()
@@ -236,6 +258,7 @@ SOURCES: dict[str, callable] = {
     "string_aliases.txt.gz": url(f"{STRING}/protein.aliases.v12.0/9606.protein.aliases.v12.0.txt.gz"),
     "intact_human_slim.tsv": _intact_slim,
     "HuRI.tsv": url(HURI),
+    "biogrid_2.0.60_human.tsv": _biogrid_2009,  # dated graph (BioGRID as of Dec 2009)
     "reactome_fi.zip": url("https://reactome.org/download/tools/ReactomeFIs/FIsInGene_04142025_with_annotations.txt.zip"),
     "hgnc.tsv": url("https://storage.googleapis.com/public-download-files/hgnc/tsv/tsv/hgnc_complete_set.txt"),
     "gene2pubmed.gz": url("https://ftp.ncbi.nlm.nih.gov/gene/DATA/gene2pubmed.gz"),

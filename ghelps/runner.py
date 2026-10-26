@@ -66,6 +66,12 @@ def _universes() -> dict:
     return yaml.safe_load(open(ROOT / "configs" / "data.yaml"))["universes"]
 
 
+def _dated() -> dict:
+    """Dated graphs per universe (built on its genes, not part of its definition)."""
+    import yaml
+    return yaml.safe_load(open(ROOT / "configs" / "data.yaml")).get("dated_graphs", {})
+
+
 def expand(exp: dict, best: dict | None = None) -> list[dict]:
     """Grid -> run configs. Hyperparameters: the tuned params for (universe, model, loss,
     graph condition) if given, then the experiment's own `hparams` on top. Combinations whose
@@ -84,7 +90,7 @@ def expand(exp: dict, best: dict | None = None) -> list[dict]:
             r["graph"], r["copy"] = None, None
         elif r["copy"] not in conditions:      # e.g. shuffled edge vectors for a non-edge model
             continue
-        elif r["graph"] not in universes[r["universe"]]:
+        elif r["graph"] not in universes[r["universe"]] + _dated().get(r["universe"], []):
             continue
         if not (P_SPLITS / r["universe"] / r["labels"] / r["split"]).exists():
             continue                           # split not built for this universe (e.g. too few wave genes)

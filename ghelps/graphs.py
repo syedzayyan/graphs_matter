@@ -72,6 +72,23 @@ def build_huri(cfg: dict) -> pd.DataFrame:
     return _canon(df.a, df.b)
 
 
+def build_biogrid09(cfg: dict) -> pd.DataFrame:
+    """BioGRID 2.0.60 (Dec 2009), physical interactions only (configs/data.yaml)."""
+    df = pd.read_csv(ids.RAW / "biogrid_2.0.60_human.tsv", sep="\t", dtype=str)
+    df = df[df.system.isin(cfg["graphs"]["biogrid09"]["physical_systems"])]
+    em = {str(int(float(k))): v for k, v in ids.entrez_map().items()}
+    return _canon(df.entrez_a.map(em), df.entrez_b.map(em))
+
+
+# Dated graphs: built on an existing universe's genes (configs/data.yaml: dated_graphs) without
+# taking part in defining it, so that universe's genes, features and splits are unchanged.
+DATED = {"biogrid09": build_biogrid09}
+
+
+def dated_graphs(cfg: dict, universe: str) -> list[str]:
+    return list(cfg.get("dated_graphs", {}).get(universe, []))
+
+
 def build_all(cfg: dict) -> dict[str, pd.DataFrame]:
     links = _string_links(cfg)
     return {

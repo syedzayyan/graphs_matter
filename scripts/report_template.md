@@ -587,6 +587,29 @@ What it shows (pooled column):
 
 {{delong_novelty_contrast_feats}}
 
+**A dated graph.** STRING v12 is a current snapshot. On the time split it can link future targets to known ones through papers and experiments published after 2010, so Table 6.3b's STRING gain may be leakage. The same time-split runs are repeated on the STRING universe's genes with three graphs (`configs/exp_dated_graph.yaml`; Minikel label, nnPU, `attn_free` and `dated` features):
+- **STRING v12:** the current graph (231,803 edges on these genes)
+- **BioGRID Dec 2009:** BioGRID 2.0.60, physical interactions only (17,842 edges; 9,835 of 15,886 genes have none). Its coverage is itself study-biased: 63% of the targets known in 2009 have an interaction, against 37% of the test negatives.
+- **STRING, thinned:** STRING's own edges, uniformly sampled down to BioGRID's 17,842. This separates "sparser" from "dated".
+
+Hyperparameters are STRING's (tuned per universe and graph condition, not per graph).
+
+*Reading, fixed before these runs (see the git history of `scripts/report_template.md`).* The measure is the real − empty effect for graph models (hierarchical bootstrap, as in Table 2.3a), per graph and feature set:
+- **BioGRID CI includes or is below 0, thinned-STRING CI above 0:** the STRING gain on the time split was largely post-2010 knowledge, i.e. leakage. §6.3's graph conclusions for STRING are then restated as leakage.
+- **BioGRID CI above 0:** a 2009 graph carries the same kind of gain, so leakage is not the explanation. What the graph supplies (proximity to known targets, §6.2) was already available in 2009.
+- **Both CIs include 0:** sparsity alone removes the gain, and this test can't tell whether it was leakage.
+- **Supporting:** graph model vs RF on the same features on BioGRID. If its CI includes or is below 0, "graph models don't beat RF on the time split" also holds without a leaking graph.
+
+**Table 6.3g: time split on three graphs over the STRING genes** (nnPU, `real / rewired / empty`; `attn_free`, then `dated`).
+
+{{dated_head_attn_free}}
+
+{{dated_head_dated}}
+
+**Table 6.3h: effect sizes per graph** (real − empty, real − rewired, graph model − RF; 95% hierarchical-bootstrap CI).
+
+{{dated_effects}}
+
 ### 6.4 A different label: human genetic evidence
 
 **Setup.** This tests whether a label that doesn't encode drug history finds the *novel* future targets better.
@@ -896,7 +919,7 @@ The literature graph *alone* carries the label, through study-correlated topolog
 ## 10. Next steps
 
 1. **More labels on the time split** (§6.4 has genetic evidence): Phase I entries, or genetic evidence restricted to GWAS and burden (hypothesis-free) once enough pre-2010 data exists.
-2. **A dated graph:** STRING 2009 (v8.x) or a 2009 BioGRID release, so graph models on the time split are leak-free too. (Dated features are done: `dated`, §6.)
+2. **A dated graph:** set up with BioGRID Dec 2009 and a density control (§6.3, `configs/exp_dated_graph.yaml`). STRING v8.3's bulk downloads are no longer served, so BioGRID is the dated graph. (Dated features are done: `dated`, §6.)
 3. **gnomAD constraint and AlphaFold pockets,** as further non-literature features, run through §4.3's leak test.
 4. **Write-up:**
    - Open with the thesis that the label records portfolio decisions, so predicting it well measures imitation. Put it in the introduction, not the discussion: §6.1 is the evidence, and it is also the obvious objection to the time split.

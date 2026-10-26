@@ -19,7 +19,9 @@ feature set / universe / split / loss / label set; random regime), the mean AURO
 weighting every model equally (mean over models of the mean over that model's cells of the
 mean over seeds), with a 95% hierarchical bootstrap CI: resample models, then cells within each
 model, then seeds within each cell (2000 draws). The three universes are too few to resample,
-so they are reported separately. Per-seed deltas: delong_seeds.csv.gz.
+so they are reported separately. An experiment with several graphs on one universe (dated
+graphs) also gets per graph and per graph x feature set rows (by "graph|feats", level
+"<graph>|<feats>"). Per-seed deltas: delong_seeds.csv.gz.
 Test genes per regime are those evaluate.by_regime scores (random: all test positives vs all
 test unlabelled; matched regimes: the pooled matched sets). Labels are positive vs
 unlabelled, so these compare rankings of known targets against unlabelled genes.
@@ -122,10 +124,13 @@ def effects(per_seed: pd.DataFrame) -> pd.DataFrame:
     rng = np.random.default_rng(0)
     d = per_seed[per_seed.regime == "random"]
     rows = []
-    for by in [[]] + [[a] for a in EFFECT_BY if d[a].nunique() > 1]:
+    bys = [[]] + [[a] for a in EFFECT_BY if d[a].nunique() > 1]
+    if d.groupby("universe").graph.nunique().max() > 1:  # several graphs on one universe (dated graphs)
+        bys += [["graph"], ["graph", "feats"]]
+    for by in bys:
         for key, g in d.groupby(["contrast"] + by):
             key = key if isinstance(key, tuple) else (key,)
-            rows.append({"contrast": key[0], "by": by[0] if by else "-", "level": key[1] if by else "-",
+            rows.append({"contrast": key[0], "by": "|".join(by) or "-", "level": "|".join(map(str, key[1:])) or "-",
                          **_hier_boot(g, rng)})
     return pd.DataFrame(rows)
 

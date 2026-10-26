@@ -82,6 +82,15 @@ All graphs are undirected, deduplicated, without self-loops, and restricted to p
 | **Reactome FI** | pairs annotated only as "predicted" (Reactome's naive-Bayes predictions) dropped; pairs with curated support kept. |
 | **HuRI** | all pairs (systematic yeast two-hybrid). |
 
+**Dated graphs** (`scripts/build_dated_graphs.py`, `configs/exp_dated_graph.yaml`) are built on the STRING universe's genes without changing its definition. A gene a dated graph doesn't cover is an isolated node.
+
+| graph | edges kept | edges / isolated genes on the STRING universe |
+|---|---|---|
+| **BioGRID Dec 2009** (`biogrid09`) | BioGRID 2.0.60 (27 Dec 2009), human–human, physical experimental systems only (genetic-interaction and RNA systems dropped). Entrez ids mapped to ENSG through HGNC. | 17,842 / 9,835 |
+| **STRING, thinned** (`string_sub09`) | density control: a uniform random sample (seed 0) of the STRING graph's edges, as many as BioGRID 2009 has | 17,842 / 6,338 |
+
+Both get real, rewired, pathway-subgraph and empty copies and structural statistics, like the other graphs. They have no edge vectors, so the edge-aware GAT is not run on them. They reuse STRING's tuned hyperparameters.
+
 ### 3.2 Universes
 
 Each experiment universe is one graph's node set: the protein-coding genes with at least one edge in that graph. Node indices are fixed by `genes.txt`.
@@ -494,7 +503,7 @@ For each contrast, the effect size is the mean AUROC difference, using random ne
 
 ## 12. Pre-specified readings
 
-Four sets of interpretations were written into `scripts/report_template.md` before the corresponding results were generated. The git history of that file records when.
+Five sets of interpretations were written into `scripts/report_template.md` before the corresponding results were generated. The git history of that file records when.
 
 **1. Pfam split (§2.2).**
 - **Prediction:** if RF with `attn_free` features loses clearly more AUROC from the random to the Pfam split than RF with `all` features, the family shortcut is confirmed. If it loses about as little, the reading of the family-shuffle control has to be weakened.
@@ -516,6 +525,12 @@ Four sets of interpretations were written into `scripts/report_template.md` befo
 - **Added after the results (not pre-specified):** the top-100 audit of §6.4 (`time_topk_audit.csv`). It shows the genetic-trained models leaving the drugged families, which is outcome C's mechanism, even though the pre-stated rule gives B.
 
 **2b. Retuning (§6.4).** If all four primary CIs stay below 0 after both labels are retuned on the time split, tuning is ruled out. If any CI includes 0, the deficit is partly a tuning artefact, and §6.4 and §6.5 R3 are restated.
+
+**2c. Dated graph (§6.3).** The measure is the real − empty effect for graph models on the time split (Minikel, nnPU), per graph and feature set:
+- BioGRID 2009 CI includes or is below 0 while thinned STRING's CI is above 0: the STRING gain was leakage.
+- BioGRID CI above 0: leakage is not the explanation.
+- Both CIs include 0: the test is uninformative.
+- Supporting: graph model vs RF on BioGRID.
 
 **3. Success given tried (§6.5).** Fixed in commit `cea67b8`, before computing:
 - **R1:** if outcome AUROC − 0.5 is less than half of selection AUROC − 0.5 (PubMed before 2010; RF with `all` and `attn_free`), the label is mostly selection.

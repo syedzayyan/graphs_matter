@@ -30,7 +30,8 @@ def main() -> None:
     sub.add_parser("fetch", help="download any missing raw sources into $GHELPS_DATA/raw")
 
     b = sub.add_parser("build", help="fetch + build graphs, structural stats, edge vectors, features, splits")
-    b.add_argument("--steps", nargs="+", choices=["graphs", "structure", "edge_attr", "features", "splits"],
+    b.add_argument("--steps", nargs="+",
+                   choices=["graphs", "structure", "edge_attr", "features", "splits", "dated_graphs"],
                    help="rebuild exactly these steps (default: whatever is missing)")
 
     r = sub.add_parser("run", help="run an experiment config")

@@ -19,7 +19,7 @@ from ghelps import fetch, paths
 
 ROOT = Path(__file__).resolve().parents[1]
 P = paths.PROCESSED
-STEPS = ["graphs", "structure", "edge_attr", "features", "splits"]
+STEPS = ["graphs", "structure", "edge_attr", "features", "splits", "dated_graphs"]
 
 
 def _universes() -> dict[str, list[str]]:
@@ -55,6 +55,11 @@ def _done(step: str) -> bool:
             for n in u for ls in sc["label_sets"]) and all(
             (P / "splits" / n / ls / "time" / f"seed{sc['n_seeds'] - 1}.neg.parquet").exists()
             for n in u for ls in ("minikel", "genetic"))
+    if step == "dated_graphs":
+        from ghelps.graphs import dated_graphs
+        cfg = yaml.safe_load(open(ROOT / "configs" / "data.yaml"))
+        return all((P / "graphs" / n / f"{g}.{c}.npy").exists() and (P / "structure" / n / f"{g}.real.parquet").exists()
+                   for n in u for g in dated_graphs(cfg, n) for c in ("real", "rw0", "pwsub", "empty"))
     raise ValueError(step)
 
 

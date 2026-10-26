@@ -608,6 +608,41 @@ def tuned_tables():
     put("tuned_tried", t[["contrast", "model", "feats", "minikel", "genetic", "genetic − Minikel"]], index=False)
 
 
+DATED_GRAPHS = {"string": "STRING v12", "biogrid09": "BioGRID Dec 2009", "string_sub09": "STRING, thinned"}
+
+
+def dated_tables():
+    """§6.3: the time split on STRING v12, BioGRID 2009 and thinned STRING (results/dated_graph)."""
+    s = summ("dated_graph")
+    s = s[(s.regime == "random") & (s.split == "time") & (s.loss == "nnpu") & (s.labels == "minikel")]
+    s = s.assign(c=np.where(s.cond.str.startswith("rw"), "rewired", s.cond))
+    for fe in ("attn_free", "dated"):
+        x = s[s.feats == fe]
+        t = x.pivot_table(index=["model", "graph"], columns="c", values="mean")
+        cells = {}
+        for (m, g), r in t.iterrows():
+            if g == "-":
+                cells[(m, "no graph")] = f"{r.get('none', np.nan):.3f}"
+            else:
+                cells[(m, DATED_GRAPHS[g])] = " / ".join("–" if pd.isna(r.get(c)) else f"{r.get(c):.3f}"
+                                                         for c in ("real", "rewired", "empty"))
+        w = pd.Series(cells).unstack()
+        w = w.reindex(columns=[c for c in [*DATED_GRAPHS.values(), "no graph"] if c in w.columns])
+        w = w.reindex([m for m in ORDER if m in w.index]).fillna("")
+        w.index = w.index.map(MN)
+        put(f"dated_head_{fe}", w)
+    e = pd.read_csv(R / "dated_graph" / "effects.csv")
+    e = e[e.by == "graph|feats"].copy()
+    e[["graph", "feats"]] = e.level.str.split("|", expand=True)
+    e["cell"] = [ci(r.mean_delta, r.ci_lo, r.ci_hi) for r in e.itertuples()]
+    for r in e.itertuples():
+        num(f"dated_eff_{r.contrast}_{r.graph}_{r.feats}", r.cell)
+    w = e.pivot_table(index=["contrast", "feats"], columns="graph", values="cell", aggfunc="first")
+    w = w.reindex(columns=[g for g in DATED_GRAPHS if g in w.columns])
+    w.columns = [DATED_GRAPHS[g] for g in w.columns]
+    put("dated_effects", w.reindex(["empty", "rewired", "vs_rf_feat"], level=0).fillna("–"))
+
+
 def genetic_delong():
     d = delong("novelty")
     d = d[(d.contrast == "vs_minikel_label") & (d.regime == "random")]
@@ -647,7 +682,7 @@ def control_tables():
 
 SECTIONS = [setup, fit_failures, main_tables, pfam_tables, delong_tables, effect_tables, feature_tables,
             analysis_tables, label_bias, coverage_table, discovery_tables, gp_table, novelty_tables, genetic_topk,
-            tried_tables, tuned_tables, genetic_delong, waves_tables, control_tables]
+            tried_tables, tuned_tables, dated_tables, genetic_delong, waves_tables, control_tables]
 
 
 def main():
