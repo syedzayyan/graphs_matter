@@ -466,6 +466,7 @@ For each contrast, the effect size is the mean AUROC difference, using random ne
 | `phase_ladder.csv` | Models trained on ≥ Phase III: AUROC of test-fold genes with an earlier programme (preclinical / Phase I / Phase II) against genes with none. Overall, per phase and within PubMed quintiles. |
 | `time_novelty.csv` | Novelty strata (below) with the CIs of §10.3. |
 | `time_topk_audit.csv` | Time split, nnPU, `all` / `attn_free` / `dated`, real graph or none, both labels: the top-100 test genes per run (each seed's own test set; the test negatives are redrawn per seed). Reports the share that are future targets and novel (2 of 3) future targets, the median PubMed percentile before 2010 and the share in that top decile, the share in a drug programme today, the share sharing Pfam with or within 1 hop of a target drugged before 2010, and the share with genetic evidence before 2010 and at any date. Reference rows: all test genes, and the PubMed-before-2010 ranker. Mean over seeds. |
+| `tried_*.csv` | Success given tried (§6.5). Genes are grouped from Minikel's target–indication pairs: never tried (nothing beyond preclinical), tried (≥ Phase I), success (≥ Phase III, i.e. the label), and resolved failure (best Phase I/II with no active programme; active ones are censored). For each predictor it reports AUROC for the label (success vs rest), selection (tried vs never) and outcome (success vs resolved failure), with 95% CIs from 2,000 gene bootstraps. Predictors: PubMed before 2010 and now; genetic evidence before 2010 and any date; out-of-fold scores from the main experiment (each seed's test-set percentile, averaged over the seeds a gene was tested in). Also the odds ratio (Woolf CI, +0.5 correction) of success vs resolved failure for genetic evidence. On the time split, genetic- vs Minikel-trained twins are compared on selection and outcome among the test genes, paired, per graph and pooled with genes as clusters. |
 | `time_split_coverage.csv` | Train / test / undated-launched / undated-Phase-III-only / no-programme genes, compared on study before 2010 and now, and on novelty relative to the targets known before 2010. |
 
 **Novelty strata.** Each future target is placed in strata by what was known before 2010:
@@ -488,7 +489,7 @@ For each contrast, the effect size is the mean AUROC difference, using random ne
 
 ## 12. Pre-specified readings
 
-Two interpretations were written into `scripts/report_template.md` before the corresponding results were generated. The git history of that file records when.
+Three sets of interpretations were written into `scripts/report_template.md` before the corresponding results were generated. The git history of that file records when.
 
 **1. Pfam split (§2.2).**
 - **Prediction:** if RF with `attn_free` features loses clearly more AUROC from the random to the Pfam split than RF with `all` features, the family shortcut is confirmed. If it loses about as little, the reading of the family-shuffle control has to be weakened.
@@ -507,6 +508,11 @@ Two interpretations were written into `scripts/report_template.md` before the co
   | C | CI below 0, and genetic-trained rankings follow study clearly less |
 
 - **Not the endpoint:** overall AUROC on all future targets. The smoke test had already shown the genetic label doing worse there.
+**3. Success given tried (§6.5).** Fixed in commit `cea67b8`, before computing:
+- **R1:** if outcome AUROC − 0.5 is less than half of selection AUROC − 0.5 (PubMed before 2010; RF with `all` and `attn_free`), the label is mostly selection.
+- **R2:** if the odds-ratio CI for pre-2010 genetic evidence is above 1, the genetic label carries outcome signal.
+- **R3:** on the time split, genetic − Minikel. An outcome CI that includes or exceeds 0, with the selection CI below 0, would mean a selection deficit. Both below 0 would mean the genetic label, as learned, is weaker.
+
 - **Added after the results (not pre-specified):** the top-100 audit of §6.4 (`time_topk_audit.csv`). It shows the genetic-trained models leaving the drugged families, which is outcome C's mechanism, even though the pre-stated rule gives B.
 
 ---

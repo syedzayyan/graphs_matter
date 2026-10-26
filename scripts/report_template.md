@@ -55,7 +55,11 @@ So the null result is about the task and its label, not the method.
 **What this does and doesn't show.** It shows that the Phase ≥ III label plus current features reward rediscovery. §6.4 tests whether a different label escapes the loop: the same time split, trained on human genetic evidence published before 2010, with the reading of each outcome fixed in advance.
 - **Result: outcome B by the pre-stated rule, but C's mechanism is visible.** The genetic label finds *fewer* novel future targets than the Minikel label on every primary comparison: {{n:primary_rf_feat_dated}} for RF with `dated` features, {{n:primary_gp_attn_free}} for the GP with `attn_free`. Over the whole ranking, its models follow 2009 study as closely as the Minikel ones.
 - **Its top picks are different genes.** Of RF's top 100, {{n:tk_rf_genetic_frac_shares_pfam_with_known}} share a Pfam domain with a 2009 target, against {{n:tk_rf_minikel_frac_shares_pfam_with_known}} for Minikel. They are less often already in a programme and less often top-decile studied. Only {{n:tk_rf_genetic_frac_future_target}} became drug targets, against {{n:tk_rf_minikel_frac_future_target}} (Table 6.4l).
-- **Reading:** the benchmark counts a hit only when a company later drugged the gene, so a label that leaves the portfolio loses by construction. This is evidence that the benchmark measures imitation, not that genetics finds worse targets. The features still add study bias on top of any label.
+- **Selection vs outcome (§6.5, readings fixed in advance).** The Phase ≥ III label is about half "which genes the industry tried" and half "which tried genes succeeded".
+  - Study predicts mostly the first: PubMed keeps {{n:tried_ratio_pubmed}} of its excess AUROC once a gene has been tried.
+  - Genetic evidence predicts both about equally, and raises the odds of success given tried {{n:tried_or_genetic}}.
+  - Models trained on the genetic label don't inherit that. On the time split they are worse than Minikel-trained models at telling which tried genes succeed ({{n:tried_time_outcome_rf_feat_attn_free}} to {{n:tried_time_outcome_gp_dated}}).
+- **Reading:** the label conflates industry choice with therapeutic outcome. The features can learn the choice (study, family) but not the genetic signal that predicts outcome, so swapping the label alone doesn't help.
 
 ---
 
@@ -649,7 +653,7 @@ The extreme values in the full range come from cells outside the primary endpoin
   - with genetic evidence before 2010: {{n:tk_rf_genetic_frac_genetic_before_T}} vs {{n:tk_rf_minikel_frac_genetic_before_T}} (base rate {{n:tk_base_frac_genetic_before_T}})
   - future targets: {{n:tk_rf_genetic_frac_future_target}} vs {{n:tk_rf_minikel_frac_future_target}} (base rate {{n:tk_base_frac_future_target}})
 - **So the genetic label largely leaves the drugged families, and somewhat leaves the studied and already-investigated genes.** Its top picks are disease genes, and companies mostly did not go on to drug them. That is outcome C's mechanism. Spearman is computed over all test genes, so it can't show a change at the top. Its picks are still more studied than the base rate, so the features do pull study bias back in (the part of B that holds).
-- **What this means for the question.** A hit here is a gene a company later took to Phase III. A label that points away from the portfolio is wrong by construction on this benchmark, whether or not its genes are good targets. §6.4 therefore can't show that genetics generalises worse to new targets. What it shows is that the benchmark rewards imitating the portfolio, and that every label picks up some study bias from the features. Testing whether genetics finds *better* targets needs an outcome not chosen by drug development, such as success given that a trial started.
+- **What this means for the question.** A hit here is a gene a company later took to Phase III, so a label that points away from the portfolio is scored as wrong whether or not its genes are good targets. §6.5 tests that directly, among genes that were tried. Genetic-trained models are also worse at telling which tried genes succeed (§6.5, R3), so the deficit isn't only the benchmark rewarding imitation. The divergence in Table 6.4l is real, but the divergent picks aren't shown to be better. The genetic *evidence* carries outcome signal (§6.5, R2). The *models* trained on it don't.
 
 **Table 6.4b: time split, nnPU, genetic label** (`real / rewired / empty`). Compare with Tables 6.3a–b, which are trained on the Minikel label.
 
@@ -740,6 +744,20 @@ HuRI:
   - If the outcome CI includes or exceeds 0 while the selection CI is below 0, the deficit is consistent with a selection deficit: the genetic label loses at predicting which genes get tried, not which tried genes succeed.
   - If the outcome CI is below 0 as well, the genetic-trained models are worse at both, and the genetic label is weaker, not only different.
   - The time split has about 100 resolved failures pooled, so a CI that includes 0 is weak evidence by itself. The first branch needs the selection CI below 0 too.
+
+**Result.**
+- **R1: at the threshold, so neither branch cleanly.** Once a gene has been tried, PubMed keeps {{n:tried_ratio_pubmed}} of its excess AUROC (selection {{n:tried_selection_pubmed}} → outcome {{n:tried_outcome_pubmed}}). RF keeps {{n:tried_ratio_rf_all}} with `all` features and {{n:tried_ratio_rf_attn_free}} with `attn_free`.
+  - By the rule, "mostly selection" holds for PubMed on STRING and HuRI, sits exactly on the line on Reactome FI, and fails narrowly for RF with `all` features on STRING and Reactome FI.
+  - **Reading:** about half of what predicts the Phase ≥ III label predicts which genes get tried, and about half survives to outcome. The portfolio critique holds in a qualified form: the label is roughly half selection, not mostly selection. PubMed's outcome AUROC is pushed up by papers written after success (built-in bias above), so for study the selection share is, if anything, larger.
+- **Not pre-specified, but from the same quantities:** genetic evidence before 2010 keeps {{n:tried_ratio_genetic}} of its excess AUROC. Its signal is weak (selection {{n:tried_selection_genetic}}, outcome {{n:tried_outcome_genetic}}), but conditioning on being tried doesn't shrink it. Study mostly predicts who gets tried. Genetics predicts trial selection and trial success about equally.
+- **R2: yes.** Among tried genes, pre-2010 genetic evidence raises the odds of reaching Phase III: odds ratio {{n:tried_or_genetic}}, every CI above 1. This matches Minikel et al.'s ~2.6× at the indication-matched level, although the gene-level flag here is coarser.
+- **R3: the second branch.** On the time split, genetic-trained models are worse at both, pooled over graphs:
+  - selection: {{n:tried_time_selection_rf_feat_attn_free}} (RF `attn_free`) to {{n:tried_time_selection_gp_dated}} (GP `dated`)
+  - outcome: {{n:tried_time_outcome_rf_feat_attn_free}} (RF `attn_free`) to {{n:tried_time_outcome_gp_dated}} (GP `dated`)
+  - By the rule fixed in advance, the genetic label, as these models learn it, is weaker, not only different.
+- **R2 and R3 together.** The genetic evidence carries outcome signal, but models trained to reproduce the genetic label from these features don't pass it on. Genetic-trained RF reaches outcome AUROC 0.50–0.62, no better than the raw genetic flag (0.60). The features can express study and family resemblance, but not what makes genetic support predictive (outcome B, §6.4).
+  - *Not a level field:* the Minikel-trained models were trained on pre-2010 successes against everything else, which is close to this outcome contrast. The genetic-trained models never saw a drug outcome.
+  - *What "outcome" means here:* reaching Phase III is itself partly a development decision, so the outcome contrast is cleaner than the label but not free of portfolio choices.
 
 **Group sizes:**
 

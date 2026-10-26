@@ -58,6 +58,18 @@ time_topk_audit.csv  time split: what does each label's model rank highest? Per 
                   1 hop of a target drugged before 2010, and share with genetic evidence before
                   2010 / at any date. Reference rows "all test genes" (base rates) and
                   "pubmed_before_T". Mean over seeds.
+tried_*.csv       success given tried (report 6.5). Genes by Minikel programme history: never
+                  tried (nothing beyond preclinical), tried (>= Phase I), success (>= Phase III,
+                  the label), resolved failure (best Phase I/II, no active programme; active
+                  ones are censored). AUROC of each predictor for label (success vs rest),
+                  selection (tried vs never) and outcome (success vs resolved failure), 95%
+                  gene bootstrap CIs. Predictors: PubMed before 2010 / now, genetic evidence
+                  before 2010 / any, and out-of-fold scores of results/main (random split,
+                  minikel, nnpu; per-seed test percentile averaged over the seeds a gene was
+                  tested in). tried_groups: group sizes. tried_genetic_or: odds ratio of
+                  success vs resolved failure for genetic evidence. tried_time: time split,
+                  genetic- vs Minikel-trained twins on the test genes, selection and outcome
+                  AUROC and the paired difference, per graph and pooled (genes as clusters).
 topk_audit and phase_ladder need results/main, time_novelty and time_topk_audit
 results/novelty (the summarise job runs this after collecting them).
 
@@ -419,6 +431,153 @@ def time_topk_audit(universe: str, genes: list[str], graph: str, cum: pd.DataFra
             .reset_index().assign(universe=universe, graph=graph).to_dict("records"))
 
 
+# ---------------------------------------------------------------------------------------
+# Success given tried: does what predicts the label predict selection or outcome?
+
+TRIED_BOOT = 2000
+TRIED_MAIN = dict(models=("rf_feat", "mlp_feat", "gp", "cs_feat"), feats=("all", "attn_free"))
+TRIED_TIME = dict(models=("rf_feat", "gp"), feats=("attn_free", "dated"))
+
+
+def tried_groups(genes: list[str]) -> pd.DataFrame:
+    """Per gene: tried / success / resolved failure / never tried, from Minikel's pairs."""
+    pp = labels._minikel_pp()
+    g = pp.groupby("ensg").agg(best=("ccatnum", "max"), active=("acat", lambda a: a.notna().any())).reindex(genes)
+    best, act = g.best.fillna(0).values, g.active.fillna(False).values.astype(bool)
+    tried = best >= 2
+    return pd.DataFrame({"tried": tried, "never": ~tried, "success": best >= 4,
+                         "failure": tried & (best <= 3) & ~act}, index=genes)
+
+
+def _boot_auc(s: np.ndarray, y: np.ndarray, w: np.ndarray) -> np.ndarray:
+    """AUROC of score s for 0/1 y under each row of bootstrap weights w (B, n); ties count 1/2."""
+    _, grp = np.unique(s, return_inverse=True)
+    mt = coo_matrix((np.ones(len(s)), (grp, np.arange(len(s))))).tocsr()  # (groups, n), groups in score order
+    out = []
+    for wc in np.array_split(w, max(1, len(w) // 250)):  # chunks keep (B, n) arrays small
+        P, N = (mt @ (wc * y).T).T, (mt @ (wc * (1 - y)).T).T
+        below = np.cumsum(N, 1) - N
+        out.append((P * (below + 0.5 * N)).sum(1) / np.maximum(P.sum(1) * N.sum(1), 1e-12))
+    return np.concatenate(out)
+
+
+def _cluster_weights(cluster: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """Bootstrap weights per row, resampling clusters (genes) with replacement."""
+    _, c = np.unique(cluster, return_inverse=True)
+    k = c.max() + 1
+    return rng.multinomial(k, np.full(k, 1 / k), size=TRIED_BOOT)[:, c].astype(float)
+
+
+def _oof_scores(exp: str, universe: str, labels_: str, split: str, keep) -> dict[tuple, pd.Series]:
+    """run key -> per-gene mean over seeds of the score's percentile among that seed's test genes."""
+    f = ROOT / "results" / exp / "results.csv"
+    if not f.exists():
+        return {}
+    runs = pd.read_csv(f, usecols=["run_id", *AXES]).drop_duplicates("run_id")
+    runs["copy"] = runs["copy"].fillna("none")
+    runs = runs[(runs.universe == universe) & (runs["labels"] == labels_) & (runs.split == split) & keep(runs)]
+    genes = data.genes_of(universe)
+    out = {}
+    for key, rs in runs.groupby(["model", "feats", "copy"]):
+        acc = []
+        for r in rs.itertuples():
+            sf = ROOT / "results" / exp / "scores" / f"{r.run_id}.npy"
+            if not sf.exists():
+                continue
+            sp = pd.read_parquet(paths.PROCESSED / "splits" / universe / "minikel" / split / f"seed{r.seed}.parquet")
+            test = np.flatnonzero(sp.fold.values == "test")
+            sc = np.load(sf).astype(float)[test]
+            acc.append(pd.Series(rankdata(sc) / len(sc), index=np.array(genes)[test]))
+        if acc:
+            out[key] = pd.concat(acc).groupby(level=0).mean()
+    return out
+
+
+def success_given_tried(universe: str, genes: list[str], cum: pd.DataFrame):
+    rng = np.random.default_rng(0)
+    T = CFG["splits"]["time_split_year"]
+    gr = tried_groups(genes)
+    G = np.array(genes)
+    pred = {"pubmed_before_T": cum.reindex(genes, fill_value=0)[T - 1].values.astype(float),
+            "pubmed_now": data.pubmed_counts(universe).astype(float),
+            "genetic_before_T": np.isin(G, list(labels.genetic(before=T))).astype(float),
+            "genetic_any": np.isin(G, list(labels.genetic())).astype(float)}
+    oof = _oof_scores("main", universe, "minikel", "random", lambda r: (r.loss == "nnpu")
+                      & r.model.isin(TRIED_MAIN["models"]) & r.feats.isin(TRIED_MAIN["feats"])
+                      & r["copy"].isin(["none", "real"]))
+    contrasts = {"label": (gr.success.values, ~gr.success.values), "selection": (gr.tried.values, gr.never.values),
+                 "outcome": (gr.success.values, gr.failure.values)}
+    groups = [dict(universe=universe, **{k: int(v.sum()) for k, v in gr.items()},
+                   censored=int((gr.tried & ~gr.success & ~gr.failure).sum()))]
+    rows = []
+    for cname, (pos, neg) in contrasts.items():
+        sel = pos | neg
+        w = _cluster_weights(G[sel], rng)
+        y = pos[sel].astype(float)
+        scored = [(k, None, v[sel]) for k, v in pred.items()]
+        scored += [(f"{m} ({fe}{'' if c == 'none' else ', graph'})", ser, None) for (m, fe, c), ser in oof.items()]
+        for name, ser, v in scored:
+            if ser is not None:  # out-of-fold: genes never tested are dropped
+                v = ser.reindex(G[sel]).values
+            ok = ~np.isnan(v)
+            b = _boot_auc(v[ok], y[ok], w[:, ok])
+            rows.append(dict(universe=universe, predictor=name, contrast=cname, n_pos=int(y[ok].sum()),
+                             n_neg=int((1 - y[ok]).sum()), auroc=auc(y[ok], v[ok]),
+                             lo=np.quantile(b, 0.025), hi=np.quantile(b, 0.975)))
+    ors = []
+    for k in ("genetic_before_T", "genetic_any"):
+        e = pred[k] > 0
+        a, b_, c, d = [int((m1 & m2).sum()) for m1 in (gr.success.values, gr.failure.values) for m2 in (e, ~e)]
+        lor, se = np.log((a + .5) * (d + .5) / ((b_ + .5) * (c + .5))), np.sqrt(sum(1 / (x + .5) for x in (a, b_, c, d)))
+        ors.append(dict(universe=universe, evidence=k, success_with=a, success_without=b_, failure_with=c,
+                        failure_without=d, odds_ratio=np.exp(lor), lo=np.exp(lor - 1.96 * se), hi=np.exp(lor + 1.96 * se)))
+    return groups, rows, ors
+
+
+def _time_tried_rows(universe: str, genes: list[str]) -> pd.DataFrame:
+    """Per gene of the time split's test sets: group flags and each twin's out-of-fold percentile."""
+    gr = tried_groups(genes)
+    sp = pd.read_parquet(paths.PROCESSED / "splits" / universe / "minikel" / "time" / "seed0.parquet")
+    fut = pd.Series(sp.y.values == 1, index=genes) & (sp.fold.values == "test")
+    keep = lambda r: ((r.loss == "nnpu") & r.model.isin(TRIED_TIME["models"]) & r.feats.isin(TRIED_TIME["feats"])  # noqa: E731
+                      & r["copy"].isin(["none", "real"]))
+    cols = {}
+    for lab in ("minikel", "genetic"):
+        for (m, fe, c), ser in _oof_scores(NOVELTY_EXP, universe, lab, "time", keep).items():
+            cols[(lab, m, fe)] = ser
+    if not cols:
+        return pd.DataFrame()
+    d = pd.DataFrame(cols)
+    d.columns = pd.MultiIndex.from_tuples(d.columns)
+    d = d.stack([1, 2], future_stack=True).reset_index(names=["gene", "model", "feats"])
+    d["success"] = fut.reindex(d.gene).values  # future targets: >= Phase III, first drugged from T on
+    d["failure"] = gr.failure.reindex(d.gene).values
+    d["tried"], d["never"] = gr.tried.reindex(d.gene).values, gr.never.reindex(d.gene).values
+    return d.assign(universe=universe)
+
+
+def time_tried(d: pd.DataFrame) -> list[dict]:
+    if d.empty:
+        return []
+    rng = np.random.default_rng(0)
+    rows = []
+    for uni, du in [*d.groupby("universe", sort=False), ("pooled", d)]:
+        for (m, fe), g in du.groupby(["model", "feats"]):
+            g = g.dropna(subset=["minikel", "genetic"])
+            for cname, pos, neg in (("selection", g.tried, g.never), ("outcome", g.success, g.failure)):
+                sel = (pos | neg).values.astype(bool)
+                y = pos.values[sel].astype(float)
+                w = _cluster_weights(g.gene.values[sel], rng)
+                b = {lab: _boot_auc(g[lab].values[sel], y, w) for lab in ("minikel", "genetic")}
+                diff = b["genetic"] - b["minikel"]
+                rows.append(dict(universe=uni, model=m, feats=fe, contrast=cname, n_pos=int(y.sum()),
+                                 n_neg=int((1 - y).sum()),
+                                 minikel=auc(y, g.minikel.values[sel]), genetic=auc(y, g.genetic.values[sel]),
+                                 genetic_minus_minikel=auc(y, g.genetic.values[sel]) - auc(y, g.minikel.values[sel]),
+                                 lo=np.quantile(diff, 0.025), hi=np.quantile(diff, 0.975)))
+    return rows
+
+
 def _boot_means(v: np.ndarray, cluster: np.ndarray, counts: np.ndarray) -> np.ndarray:
     """Bootstrap means of v resampling clusters (genes): counts is (B, n_clusters) multinomial."""
     s = np.bincount(cluster, weights=v, minlength=counts.shape[1])
@@ -530,7 +689,7 @@ def main():
     pos_all = labels.minikel(CFG["labels"]["minikel_min_phase"])
     membrane = labels.membrane()
     sizes, hubs, mem, med, prior, audit, ladder, leak, lbias, cover = [], [], [], [], [], [], [], [], [], []
-    novelty_genes, time_topk = [], []
+    novelty_genes, time_topk, tg, tauc, tor, ttime = [], [], [], [], [], []
     phase = labels.minikel_best_phase()
     first_drugged = labels.target_first_approval()
     launch = first_drugged[first_drugged.index.isin(pos_all)]
@@ -541,6 +700,9 @@ def main():
         is_mem = np.array([g in membrane for g in genes])
         pm = data.pubmed_counts(universe)
         prior += prior_study(universe, genes, cum, launch, phase)
+        a, b, c = success_given_tried(universe, genes, cum)
+        tg, tauc, tor = tg + a, tauc + b, tor + c
+        ttime.append(_time_tried_rows(universe, genes))
         leak += study_leak(universe)
         lbias += label_bias(universe, genes, cum, pos_all, membrane)
         lpm = np.log1p(pm)
@@ -585,7 +747,8 @@ def main():
     for name, rows in (("graph_sizes", sizes), ("hub_bias", hubs), ("membrane", mem), ("mediation", med),
                        ("prior_study", prior), ("study_leak", leak), ("label_bias", lbias), ("topk_audit", audit),
                        ("phase_ladder", ladder), ("time_novelty", novelty), ("time_topk_audit", time_topk),
-                       ("time_split_coverage", cover)):
+                       ("time_split_coverage", cover), ("tried_groups", tg), ("tried_auroc", tauc),
+                       ("tried_genetic_or", tor), ("tried_time", time_tried(pd.concat([pd.DataFrame(), *ttime])))):
         if not rows:
             continue
         t = pd.DataFrame(rows)

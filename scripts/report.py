@@ -541,6 +541,50 @@ def genetic_topk():
             num(f"tk_rf_{lab}_{c}", " / ".join(span(x) for x in v))
 
 
+TRIED_PRED = {"pubmed_before_T": "PubMed before 2010", "pubmed_now": "PubMed now",
+              "genetic_before_T": "genetic evidence before 2010", "genetic_any": "genetic evidence (any date)"}
+
+
+def tried_tables():
+    """§6.5: success given tried (scripts/analysis.py: tried_*.csv)."""
+    g = pd.read_csv(A / "tried_groups.csv").set_index("universe").reindex(U)
+    g.index = pd.Index([UN[u] for u in U], name="universe")
+    put("tried_groups", g, "{:.0f}")
+    a = pd.read_csv(A / "tried_auroc.csv")
+    a["cell"] = [f"{r.auroc:.2f} [{r.lo:.2f}, {r.hi:.2f}]" for r in a.itertuples()]
+    w = a.pivot_table(index=["universe", "predictor"], columns="contrast", values="auroc")
+    a = a.pivot_table(index=["universe", "predictor"], columns="contrast", values="cell", aggfunc="first")
+    a["outcome / selection excess"] = ((w.outcome - 0.5) / (w.selection - 0.5)).map("{:.2f}".format)
+    a = a[["label", "selection", "outcome", "outcome / selection excess"]].reset_index()
+    a["_u"], a["_p"] = a.universe.map(U.index), a.predictor.map(lambda x: (x not in TRIED_PRED, x))
+    a = a.sort_values(["_u", "_p"]).drop(columns=["_u", "_p"])
+    a["universe"] = a.universe.map(UN)
+    a["predictor"] = a.predictor.map(lambda x: TRIED_PRED.get(x) or MN.get(x.split(" (")[0], x)
+                                     + (" (" + x.split(" (", 1)[1] if " (" in x else ""))
+    put("tried_auroc", a, index=False)
+    ratio = lambda p: nums3([(w.at[(u, p), "outcome"] - .5) / (w.at[(u, p), "selection"] - .5) for u in U])  # noqa
+    for p_, k in (("pubmed_before_T", "pubmed"), ("genetic_before_T", "genetic"), ("rf_feat (all)", "rf_all"),
+                  ("rf_feat (attn_free)", "rf_attn_free")):
+        num(f"tried_ratio_{k}", ratio(p_))
+        for c in ("selection", "outcome"):
+            num(f"tried_{c}_{k}", nums3([w.at[(u, p_), c] for u in U]))
+    o = pd.read_csv(A / "tried_genetic_or.csv")
+    o["odds ratio"] = [f"{r.odds_ratio:.2f} [{r.lo:.2f}, {r.hi:.2f}]" for r in o.itertuples()]
+    o["universe"], o["evidence"] = o.universe.map(UN), o.evidence.map(TRIED_PRED)
+    put("tried_genetic_or", o.drop(columns=["odds_ratio", "lo", "hi"]), "{:.0f}", index=False)
+    x = o[o.evidence == TRIED_PRED["genetic_before_T"]]
+    num("tried_or_genetic", " / ".join(x["odds ratio"]))
+    t = pd.read_csv(A / "tried_time.csv")
+    t["genetic − Minikel"] = [ci(r.genetic_minus_minikel, r.lo, r.hi) for r in t.itertuples()]
+    t["_u"] = t.universe.map(UP.index)
+    t = by_model(t.sort_values("feats")).sort_values(["_u", "contrast"], ascending=[True, False], kind="stable")
+    for r in t[t.universe == "pooled"].itertuples():
+        num(f"tried_time_{r.contrast}_{r.model}_{r.feats}", t.at[r.Index, "genetic − Minikel"])
+    t["universe"], t["model"] = t.universe.map(UNP), t.model.map(MN)
+    put("tried_time", t[["universe", "contrast", "model", "feats", "n_pos", "n_neg", "minikel", "genetic",
+                         "genetic − Minikel"]], index=False)
+
+
 def genetic_delong():
     d = delong("novelty")
     d = d[(d.contrast == "vs_minikel_label") & (d.regime == "random")]
@@ -580,7 +624,7 @@ def control_tables():
 
 SECTIONS = [setup, fit_failures, main_tables, pfam_tables, delong_tables, effect_tables, feature_tables,
             analysis_tables, label_bias, coverage_table, discovery_tables, gp_table, novelty_tables, genetic_topk,
-            genetic_delong, waves_tables, control_tables]
+            tried_tables, genetic_delong, waves_tables, control_tables]
 
 
 def main():
