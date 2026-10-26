@@ -508,12 +508,12 @@ Three sets of interpretations were written into `scripts/report_template.md` bef
   | C | CI below 0, and genetic-trained rankings follow study clearly less |
 
 - **Not the endpoint:** overall AUROC on all future targets. The smoke test had already shown the genetic label doing worse there.
+- **Added after the results (not pre-specified):** the top-100 audit of §6.4 (`time_topk_audit.csv`). It shows the genetic-trained models leaving the drugged families, which is outcome C's mechanism, even though the pre-stated rule gives B.
+
 **3. Success given tried (§6.5).** Fixed in commit `cea67b8`, before computing:
 - **R1:** if outcome AUROC − 0.5 is less than half of selection AUROC − 0.5 (PubMed before 2010; RF with `all` and `attn_free`), the label is mostly selection.
 - **R2:** if the odds-ratio CI for pre-2010 genetic evidence is above 1, the genetic label carries outcome signal.
 - **R3:** on the time split, genetic − Minikel. An outcome CI that includes or exceeds 0, with the selection CI below 0, would mean a selection deficit. Both below 0 would mean the genetic label, as learned, is weaker.
-
-- **Added after the results (not pre-specified):** the top-100 audit of §6.4 (`time_topk_audit.csv`). It shows the genetic-trained models leaving the drugged families, which is outcome C's mechanism, even though the pre-stated rule gives B.
 
 ---
 
