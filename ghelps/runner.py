@@ -41,14 +41,18 @@ def tuning_loss(loss: str) -> str:
     return "pn" if loss.startswith("pn") else loss
 
 
-def tuned_params(best: dict, universe: str, model: str, loss: str, copy: str | None) -> dict:
+def tuned_params(best: dict, universe: str, model: str, loss: str, copy: str | None, labels: str = "",
+                 split: str = "", feats: str = "") -> dict:
     """best_params.yaml lookup: {universe: {model: {loss: {condition: params}}}}. A missing
-    entry means DEFAULTS; params from another condition are never borrowed. Params are tuned
-    on Minikel labels with the full feature set and reused for the other label sets / feature
-    sets of the same universe."""
+    entry means DEFAULTS; params from another condition are never borrowed. The default file is
+    tuned on Minikel labels with the full feature set and reused for the other label sets /
+    feature sets of the same universe. A variant file (tune.py with configs/tune_time.yaml) has
+    one such tree per "<labels>/<split>/<feats>", and a run uses only its own."""
     from ghelps.train import LADDER
     if LADDER[model][0] == "sklr":
         return {}  # untuned by design
+    if best and all("/" in k for k in best):
+        best = best.get(f"{labels}/{split}/{feats}", {})
     if best and not set(best) & set(_universes()):
         raise ValueError("best_params.yaml predates per-graph tuning (no universe level); "
                          "re-run tune.py or pass --no-tuned")
@@ -84,7 +88,8 @@ def expand(exp: dict, best: dict | None = None) -> list[dict]:
             continue
         if not (P_SPLITS / r["universe"] / r["labels"] / r["split"]).exists():
             continue                           # split not built for this universe (e.g. too few wave genes)
-        r.update(tuned_params(best, r["universe"], r["model"], r["loss"], r["copy"]), **exp.get("hparams", {}))
+        r.update(tuned_params(best, r["universe"], r["model"], r["loss"], r["copy"], r["labels"], r["split"],
+                              r["feats"]), **exp.get("hparams", {}))
         key = run_id(r)
         if key not in seen:
             seen.add(key)

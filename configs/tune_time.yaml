@@ -1,0 +1,17 @@
+# Retuning on the time split (report 6.4, "Does tuning explain the label gap?"). The main
+# tuning (configs/tune.yaml) used the random split, Minikel labels and all features, and its
+# params were reused for the genetic label and the leak-free feature sets. Here both labels are
+# tuned the same way, each on its own train/val folds of the time split, per leak-free feature
+# set, for the two primary models. Test folds are never seen. Runs: configs/exp_novelty_tuned.yaml.
+out: results/tuning_time
+universes: [string, reactome_fi, huri]
+labels: [minikel, genetic]
+feats: [attn_free, dated]
+split: time
+seeds: [5, 6]              # tuning seeds of the time split, never used for evaluation (0-4)
+trials: 60
+timeout_per_study: 3000
+sampler_seed: 0
+models: [rf_feat, gp]
+losses: [nnpu]
+conditions: [real, none]   # the conditions configs/exp_novelty_tuned.yaml runs

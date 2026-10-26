@@ -70,6 +70,8 @@ tried_*.csv       success given tried (report 6.5). Genes by Minikel programme h
                   success vs resolved failure for genetic evidence. tried_time: time split,
                   genetic- vs Minikel-trained twins on the test genes, selection and outcome
                   AUROC and the paired difference, per graph and pooled (genes as clusters).
+time_novelty_tuned.csv, tried_time_tuned.csv  the same as time_novelty / tried_time for
+                  results/novelty_tuned (both labels retuned on the time split, tune_time.yaml).
 topk_audit and phase_ladder need results/main, time_novelty and time_topk_audit
 results/novelty (the summarise job runs this after collecting them).
 
@@ -301,6 +303,7 @@ def label_bias(universe: str, genes: list[str], cum: pd.DataFrame, pos_all: set,
 # Time split: are future targets found, and which ones?
 
 NOVELTY_EXP, NOVELTY_RECALL_FRAC, NOVELTY_BOOT = "novelty", 0.10, 2000
+TUNED_EXP = "novelty_tuned"  # the 6.4 comparison with both labels retuned on the time split
 NOVELTY_KEY = ["labels", "copy", "feats", "model", "loss"]
 
 
@@ -343,12 +346,13 @@ def _wins(st: np.ndarray, fut: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return (lo + 0.5 * (hi - lo)) / len(neg), v >= np.quantile(st, 1 - NOVELTY_RECALL_FRAC)
 
 
-def time_novelty_genes(universe: str, genes: list[str], graph: str, cum: pd.DataFrame) -> pd.DataFrame:
+def time_novelty_genes(universe: str, genes: list[str], graph: str, cum: pd.DataFrame,
+                       exp: str = NOVELTY_EXP) -> pd.DataFrame:
     """One row per (run key, future target): win share and top-10% hit, averaged over seeds,
     with the target's strata. Reference rankers have labels/copy/feats/loss "-"/"none"."""
-    f = ROOT / "results" / NOVELTY_EXP / "results.csv"
+    f = ROOT / "results" / exp / "results.csv"
     if not f.exists():
-        print(f"skip time_novelty for {universe}: no results/{NOVELTY_EXP} runs", flush=True)
+        print(f"skip time_novelty for {universe}: no results/{exp} runs", flush=True)
         return pd.DataFrame()
     runs = pd.read_csv(f, usecols=["run_id", *AXES]).drop_duplicates("run_id")
     runs["copy"] = runs["copy"].fillna("none")
@@ -371,7 +375,7 @@ def time_novelty_genes(universe: str, genes: list[str], graph: str, cum: pd.Data
         assert (test[fut] == fut_idx).all(), "future targets differ between seeds"
         scored = [(dict(labels="-", copy="none", feats="-", model=k, loss="-"), v) for k, v in refs.items()]
         for r in rs.itertuples():
-            sf = ROOT / "results" / NOVELTY_EXP / "scores" / f"{r.run_id}.npy"
+            sf = ROOT / "results" / exp / "scores" / f"{r.run_id}.npy"
             if sf.exists():
                 scored.append((dict(labels=r.labels, copy=r.copy, feats=r.feats, model=r.model, loss=r.loss),
                                np.load(sf).astype(float)))
@@ -534,7 +538,7 @@ def success_given_tried(universe: str, genes: list[str], cum: pd.DataFrame):
     return groups, rows, ors
 
 
-def _time_tried_rows(universe: str, genes: list[str]) -> pd.DataFrame:
+def _time_tried_rows(universe: str, genes: list[str], exp: str = NOVELTY_EXP) -> pd.DataFrame:
     """Per gene of the time split's test sets: group flags and each twin's out-of-fold percentile."""
     gr = tried_groups(genes)
     sp = pd.read_parquet(paths.PROCESSED / "splits" / universe / "minikel" / "time" / "seed0.parquet")
@@ -543,7 +547,7 @@ def _time_tried_rows(universe: str, genes: list[str]) -> pd.DataFrame:
                       & r["copy"].isin(["none", "real"]))
     cols = {}
     for lab in ("minikel", "genetic"):
-        for (m, fe, c), ser in _oof_scores(NOVELTY_EXP, universe, lab, "time", keep).items():
+        for (m, fe, c), ser in _oof_scores(exp, universe, lab, "time", keep).items():
             cols[(lab, m, fe)] = ser
     if not cols:
         return pd.DataFrame()
@@ -690,6 +694,7 @@ def main():
     membrane = labels.membrane()
     sizes, hubs, mem, med, prior, audit, ladder, leak, lbias, cover = [], [], [], [], [], [], [], [], [], []
     novelty_genes, time_topk, tg, tauc, tor, ttime = [], [], [], [], [], []
+    tuned_genes, ttime_tuned = [], []  # results/novelty_tuned: both labels retuned on the time split
     phase = labels.minikel_best_phase()
     first_drugged = labels.target_first_approval()
     launch = first_drugged[first_drugged.index.isin(pos_all)]
@@ -703,6 +708,7 @@ def main():
         a, b, c = success_given_tried(universe, genes, cum)
         tg, tauc, tor = tg + a, tauc + b, tor + c
         ttime.append(_time_tried_rows(universe, genes))
+        ttime_tuned.append(_time_tried_rows(universe, genes, TUNED_EXP))
         leak += study_leak(universe)
         lbias += label_bias(universe, genes, cum, pos_all, membrane)
         lpm = np.log1p(pm)
@@ -738,17 +744,22 @@ def main():
             audit += a
             ladder += l
             novelty_genes.append(time_novelty_genes(universe, genes, graph, cum))
+            tuned_genes.append(time_novelty_genes(universe, genes, graph, cum, TUNED_EXP))
             time_topk += time_topk_audit(universe, genes, graph, cum, phase)
             cover += time_split_coverage(universe, genes, graph, cum, first_drugged, phase, pos_all)
     ng = pd.concat(novelty_genes, ignore_index=True) if novelty_genes else pd.DataFrame()
     novelty = time_novelty(ng) + time_novelty(ng, pooled=True)
+    ngt = pd.concat([pd.DataFrame(), *tuned_genes], ignore_index=True)
+    novelty_tuned = time_novelty(ngt) + time_novelty(ngt, pooled=True)
     if not ng.empty:
         ng.to_csv(OUT / "time_novelty_genes.csv.gz", index=False)
     for name, rows in (("graph_sizes", sizes), ("hub_bias", hubs), ("membrane", mem), ("mediation", med),
                        ("prior_study", prior), ("study_leak", leak), ("label_bias", lbias), ("topk_audit", audit),
                        ("phase_ladder", ladder), ("time_novelty", novelty), ("time_topk_audit", time_topk),
                        ("time_split_coverage", cover), ("tried_groups", tg), ("tried_auroc", tauc),
-                       ("tried_genetic_or", tor), ("tried_time", time_tried(pd.concat([pd.DataFrame(), *ttime])))):
+                       ("tried_genetic_or", tor), ("tried_time", time_tried(pd.concat([pd.DataFrame(), *ttime]))),
+                       ("time_novelty_tuned", novelty_tuned),
+                       ("tried_time_tuned", time_tried(pd.concat([pd.DataFrame(), *ttime_tuned])))):
         if not rows:
             continue
         t = pd.DataFrame(rows)

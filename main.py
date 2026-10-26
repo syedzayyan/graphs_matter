@@ -38,8 +38,8 @@ def main() -> None:
     r.add_argument("--workers", type=int, default=None,
                    help="parallel runs (default: 4 on CUDA, cpu_count - 2 on CPU)")
     r.add_argument("--name", help="override the experiment name")
-    r.add_argument("--params", default="results/tuning/best_params.yaml",
-                   help="tuned hyperparameters from tune.py (used if the file exists)")
+    r.add_argument("--params", help="tuned hyperparameters from tune.py, used if the file exists (default: the "
+                   "config's `params`, else results/tuning/best_params.yaml)")
     r.add_argument("--no-tuned", action="store_true", help="ignore tuned params, use DEFAULTS")
     r.add_argument("--shard", default="0/1", help="run only shard i of n of the grid, e.g. 3/8 (HPC arrays)")
 
@@ -77,12 +77,11 @@ def main() -> None:
         if a.name:
             exp["name"] = a.name
         workers = a.workers or (4 if device.get().type == "cuda" else max(1, (os.cpu_count() or 2) - 2))
-        params = ROOT / a.params
+        params = ROOT / (a.params or exp.get("params", "results/tuning/best_params.yaml"))
         best = None
         if not a.no_tuned and params.exists():
             best = yaml.safe_load(open(params))
-            n = sum(len(c) for m in best.values() for c in m.values() if isinstance(c, dict))
-            print(f"tuned params: {params} ({n} model/loss/condition sets)")
+            print(f"tuned params: {params}")
         else:
             print("tuned params: none, using ghelps.train.DEFAULTS")
         print(f"device={device.get()} workers={workers}", flush=True)

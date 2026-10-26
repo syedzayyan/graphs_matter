@@ -655,6 +655,20 @@ The extreme values in the full range come from cells outside the primary endpoin
 - **So the genetic label largely leaves the drugged families, and somewhat leaves the studied and already-investigated genes.** Its top picks are disease genes, and companies mostly did not go on to drug them. That is outcome C's mechanism. Spearman is computed over all test genes, so it can't show a change at the top. Its picks are still more studied than the base rate, so the features do pull study bias back in (the part of B that holds).
 - **What this means for the question.** A hit here is a gene a company later took to Phase III, so a label that points away from the portfolio is scored as wrong whether or not its genes are good targets. §6.5 tests that directly, among genes that were tried. Genetic-trained models are also worse at telling which tried genes succeed (§6.5, R3), so the deficit isn't only the benchmark rewarding imitation. The divergence in Table 6.4l is real, but the divergent picks aren't shown to be better. The genetic *evidence* carries outcome signal (§6.5, R2). The *models* trained on it don't.
 
+**Does tuning explain the gap?** The hyperparameters above were tuned once, on the random split with Minikel labels and `all` features, then reused for the genetic label (19% positives, against 1.3%) and the leak-free feature sets. To rule out a handicap for either label, RF and the GP were retuned on the time split for each label and feature set separately (`configs/tune_time.yaml`: their own train/val folds, tuning seeds 5–6, 60 trials, test folds never seen). The comparison was then rerun (`configs/exp_novelty_tuned.yaml`).
+
+*Reading, fixed before the retuned runs (see the git history of `scripts/report_template.md`):*
+- **If all four primary CIs stay below 0,** tuning is ruled out as the explanation and the result above stands.
+- **If any CI includes 0,** the genetic label's deficit is at least partly a tuning artefact, and §6.4 and §6.5's R3 are restated with the retuned models.
+
+**Table 6.4m: primary endpoint after retuning both labels** (genetic − Minikel, recall in the top 10% of novel (2 of 3) future targets, 95% CI over targets).
+
+{{tuned_primary}}
+
+**Table 6.4n: §6.5's R3 after retuning** (pooled; genetic − Minikel AUROC for selection and outcome among the time split's test genes).
+
+{{tuned_tried}}
+
 **Table 6.4b: time split, nnPU, genetic label** (`real / rewired / empty`). Compare with Tables 6.3a–b, which are trained on the Minikel label.
 
 {{genetic_head_time_nnpu_all}}

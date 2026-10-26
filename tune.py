@@ -10,6 +10,10 @@ on the controls had collapsed them (e.g. GAT on a rewired graph 0.83 -> 0.54 AUR
   empty    no edges                      (propagation / GNN models only)
   none     graph-free models
 
+Variant configs (configs/tune_time.yaml) give `labels` and `feats` as lists: one study per
+(label set, feature set) as well, written to best_params.yaml under "<labels>/<split>/<feats>"
+so that runs of that label set, split and feature set use them (ghelps/runner.tuned_params).
+
 Objective: mean val AUPRC over dedicated *tuning* split seeds (configs/tune.yaml), which
 are never used for evaluation (main.py experiments use seeds 0-4). Test folds are never
 touched. Studies live in SQLite, so parallel tune.py processes share them and an
@@ -18,6 +22,7 @@ Output: <out>/best_params.yaml  {model: {loss: {condition: {param: value}}}}  + 
 """
 import argparse
 import fcntl
+import itertools
 import os
 import sys
 from pathlib import Path
@@ -67,18 +72,28 @@ def _clean(params: dict) -> dict:
     return {k: (float(v) if k == "rf_max_features" and v != "sqrt" else v) for k, v in params.items()}
 
 
-def conditions_for(model: str) -> list[str]:
+def conditions_for(model: str, cfg: dict | None = None) -> list[str]:
+    """The model's graph conditions, limited to the config's `conditions` if it lists them."""
     from ghelps.train import LADDER
     conds = LADDER[model][2]
-    if not conds:
-        return ["none"]
-    return [c for c in ("real", "rewired", "empty") if CONDITION_COPY[c] in conds]
+    out = ["none"] if not conds else [c for c in ("real", "rewired", "empty") if CONDITION_COPY[c] in conds]
+    return [c for c in out if c in (cfg or {}).get("conditions", out)]
 
 
-def task_list(config: str = "configs/tune.yaml") -> list[tuple[str, str, str]]:
-    """(universe, model, condition) triples, the unit of one HPC array task (scripts/hpc/tune.sbatch)."""
+def variants(cfg: dict) -> list[tuple[str, str | None]]:
+    """(label set, feature set) pairs a config tunes. Plain configs: one label set and no feature
+    level (feature set "all", the original studies)."""
+    if isinstance(cfg["labels"], str):
+        return [(cfg["labels"], None)]
+    return [(lab, fe) for lab in cfg["labels"] for fe in cfg["feats"]]
+
+
+def task_list(config: str = "configs/tune.yaml") -> list[tuple]:
+    """(universe, model, condition[, labels, feats]) tuples, the unit of one HPC array task
+    (scripts/hpc/tune.sbatch)."""
     cfg = yaml.safe_load(open(ROOT / config))
-    return [(u, m, c) for u in cfg["universes"] for m in cfg["models"] for c in conditions_for(m)]
+    return [(u, m, c, *([lab, fe] if fe else [])) for lab, fe in variants(cfg)
+            for u in cfg["universes"] for m in cfg["models"] for c in conditions_for(m, cfg)]
 
 
 def graph_of(universe: str) -> str:
@@ -86,11 +101,12 @@ def graph_of(universe: str) -> str:
     return yaml.safe_load(open(ROOT / "configs" / "data.yaml"))["universes"][universe][0]
 
 
-def objective_for(universe: str, model: str, loss: str, condition: str, cfg: dict):
+def objective_for(universe: str, model: str, loss: str, condition: str, cfg: dict, labels: str,
+                  feats: str | None):
     from ghelps import data, evaluate, train
     kind, _, conds = train.LADDER[model]
     graph = graph_of(universe) if conds else None
-    problems = [data.load(universe, graph, CONDITION_COPY[condition], cfg["labels"], cfg["split"], s)
+    problems = [data.load(universe, graph, CONDITION_COPY[condition], labels, cfg["split"], s, feats=feats or "all")
                 for s in cfg["seeds"]]
     uses_prior = loss == "nnpu" and kind not in ("rf", "lp", "gp")
 
@@ -107,8 +123,8 @@ def objective_for(universe: str, model: str, loss: str, condition: str, cfg: dic
     return objective
 
 
-def _prefix(cfg: dict, universe: str = "") -> str:
-    return f"{STUDY_VERSION}__{cfg['labels']}__{cfg['split']}__{universe}"
+def _prefix(cfg: dict, labels: str, feats: str | None, universe: str = "") -> str:
+    return f"{STUDY_VERSION}__{labels}__{cfg['split']}__{f'{feats}__' if feats else ''}{universe}"
 
 
 def main() -> None:
@@ -118,6 +134,8 @@ def main() -> None:
     ap.add_argument("--models", nargs="+", help="subset of the config's models")
     ap.add_argument("--losses", nargs="+", help="subset of the config's losses")
     ap.add_argument("--conditions", nargs="+", choices=list(CONDITION_COPY), help="subset of conditions")
+    ap.add_argument("--labels", nargs="+", help="subset of a variant config's label sets")
+    ap.add_argument("--feats", nargs="+", help="subset of a variant config's feature sets")
     ap.add_argument("--trials", type=int, help="trials per study (overrides config)")
     ap.add_argument("--device", choices=["auto", "cuda", "cpu"])
     a = ap.parse_args()
@@ -134,23 +152,25 @@ def main() -> None:
     print(f"device={device.get()} storage={storage.url} tuning seeds={cfg['seeds']}", flush=True)
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-    for universe in a.universes or cfg["universes"]:
-        for model in a.models or cfg["models"]:
-            for loss in a.losses or cfg["losses"]:
-                for cond in conditions_for(model):
-                    if a.conditions and cond not in a.conditions:
-                        continue
-                    name = f"{_prefix(cfg, universe)}__{model}__{loss}__{cond}"
-                    study = optuna.create_study(study_name=name, storage=storage, direction="maximize",
-                                                sampler=optuna.samplers.TPESampler(seed=cfg.get("sampler_seed", 0)),
-                                                load_if_exists=True)
-                    todo = n_trials - len([t for t in study.trials if t.state.is_finished()])
-                    if todo > 0:
-                        study.optimize(objective_for(universe, model, loss, cond, cfg), n_trials=todo,
-                                       timeout=cfg.get("timeout_per_study"), catch=(RuntimeError, ValueError))
-                    study.trials_dataframe().to_csv(out / f"trials__{name}.csv", index=False)
-                    print(f"{universe:12s} {model:16s} {loss:5s} {cond:8s} best val AUPRC "
-                          f"{study.best_value:.4f}  {study.best_params}", flush=True)
+    todo_variants = [(lab, fe) for lab, fe in variants(cfg)
+                     if (not a.labels or lab in a.labels) and (not a.feats or fe in a.feats)]
+    grid = itertools.product(todo_variants, a.universes or cfg["universes"], a.models or cfg["models"],
+                             a.losses or cfg["losses"])
+    for (labels, feats), universe, model, loss in grid:
+        for cond in conditions_for(model, cfg):
+            if a.conditions and cond not in a.conditions:
+                continue
+            name = f"{_prefix(cfg, labels, feats, universe)}__{model}__{loss}__{cond}"
+            study = optuna.create_study(study_name=name, storage=storage, direction="maximize",
+                                        sampler=optuna.samplers.TPESampler(seed=cfg.get("sampler_seed", 0)),
+                                        load_if_exists=True)
+            todo = n_trials - len([t for t in study.trials if t.state.is_finished()])
+            if todo > 0:
+                study.optimize(objective_for(universe, model, loss, cond, cfg, labels, feats), n_trials=todo,
+                               timeout=cfg.get("timeout_per_study"), catch=(RuntimeError, ValueError))
+            study.trials_dataframe().to_csv(out / f"trials__{name}.csv", index=False)
+            print(f"{universe:12s} {model:16s} {loss:5s} {cond:8s} {labels}/{feats or 'all'} best val AUPRC "
+                  f"{study.best_value:.4f}  {study.best_params}", flush=True)
 
     write_best(out, storage, cfg)
 
@@ -172,22 +192,28 @@ def storage_for(out: Path) -> optuna.storages.RDBStorage:
 
 def write_best(out: Path, storage: optuna.storages.RDBStorage, cfg: dict) -> None:
     """Collect the best params of every finished study of this version into best_params.yaml:
-    {universe: {model: {loss: {condition: params}}}}."""
-    prefix = _prefix(cfg)
+    {universe: {model: {loss: {condition: params}}}}, or for a variant config
+    {"<labels>/<split>/<feats>": {universe: ...}}."""
     best: dict = {}
-    for s in optuna.get_all_study_summaries(storage):
-        if not s.study_name.startswith(prefix) or s.best_trial is None:
-            continue
-        universe, model, loss, cond = s.study_name[len(prefix):].split("__")
-        best.setdefault(universe, {}).setdefault(model, {}).setdefault(loss, {})[cond] = {
-            **_clean(s.best_trial.params), "_val_auprc": round(s.best_trial.value, 4)}
+    summaries = optuna.get_all_study_summaries(storage)
+    for labels, feats in variants(cfg):
+        prefix = _prefix(cfg, labels, feats)
+        tree = best.setdefault(f"{labels}/{cfg['split']}/{feats}", {}) if feats else best
+        for s in summaries:
+            if not s.study_name.startswith(prefix) or s.best_trial is None:
+                continue
+            parts = s.study_name[len(prefix):].split("__")
+            if len(parts) != 4:  # a variant study seen from a plain prefix
+                continue
+            universe, model, loss, cond = parts
+            tree.setdefault(universe, {}).setdefault(model, {}).setdefault(loss, {})[cond] = {
+                **_clean(s.best_trial.params), "_val_auprc": round(s.best_trial.value, 4)}
     # every array task rewrites this file, so write a private temp file and rename it into place
     tmp = out / f"best_params.yaml.{os.getpid()}.tmp"
     with open(tmp, "w") as f:
         yaml.safe_dump(best, f, sort_keys=True)
     tmp.replace(out / "best_params.yaml")
-    n = sum(len(c) for u in best.values() for m in u.values() for c in m.values())
-    print(f"wrote {out / 'best_params.yaml'} ({n} model/loss/condition studies)")
+    print(f"wrote {out / 'best_params.yaml'}")
 
 
 if __name__ == "__main__":

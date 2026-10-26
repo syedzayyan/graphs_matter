@@ -329,6 +329,11 @@ Neighbour-degree summaries, k-core, PageRank and betweenness are log1p-transform
 | GP | noise floor ∈ [0.05, 0.9]; nnPU only: unlabelled sample ∈ {500, 1000, 2000, 3000} |
 | nnPU torch models | + class prior π ∈ [0.005, 0.3] (log) |
 
+**Retuning on the time split** (`configs/tune_time.yaml`, run by `configs/exp_novelty_tuned.yaml`):
+- RF (no graph) and the GP (real graph) under nnPU are tuned once per (universe, label set ∈ {Minikel, genetic}, feature set ∈ {`attn_free`, `dated`}), on each label's own train/val folds of the time split, with tuning seeds 5 and 6. That makes 24 studies with the same search spaces, trial count and timeout as above.
+- A run of that label set, split and feature set uses only its own study's parameters (`best_params.yaml` keyed `<labels>/<split>/<feats>`). There is no fallback to the main tuning.
+- Purpose: to check that the §6.4 label comparison isn't driven by parameters tuned for a different label and split.
+
 **Defaults** apply when no tuned value exists: hidden 64, 2 layers, dropout 0.5, lr 0.01, weight decay 5e-4, π = 0.1, 500 trees, min leaf 5, LP and C&S α 0.85 / 0.8 with 50 layers, GP 2,000 unlabelled genes and noise floor 0.25.
 
 **Known limits:**
@@ -489,7 +494,7 @@ For each contrast, the effect size is the mean AUROC difference, using random ne
 
 ## 12. Pre-specified readings
 
-Three sets of interpretations were written into `scripts/report_template.md` before the corresponding results were generated. The git history of that file records when.
+Four sets of interpretations were written into `scripts/report_template.md` before the corresponding results were generated. The git history of that file records when.
 
 **1. Pfam split (§2.2).**
 - **Prediction:** if RF with `attn_free` features loses clearly more AUROC from the random to the Pfam split than RF with `all` features, the family shortcut is confirmed. If it loses about as little, the reading of the family-shuffle control has to be weakened.
@@ -509,6 +514,8 @@ Three sets of interpretations were written into `scripts/report_template.md` bef
 
 - **Not the endpoint:** overall AUROC on all future targets. The smoke test had already shown the genetic label doing worse there.
 - **Added after the results (not pre-specified):** the top-100 audit of §6.4 (`time_topk_audit.csv`). It shows the genetic-trained models leaving the drugged families, which is outcome C's mechanism, even though the pre-stated rule gives B.
+
+**2b. Retuning (§6.4).** If all four primary CIs stay below 0 after both labels are retuned on the time split, tuning is ruled out. If any CI includes 0, the deficit is partly a tuning artefact, and §6.4 and §6.5 R3 are restated.
 
 **3. Success given tried (§6.5).** Fixed in commit `cea67b8`, before computing:
 - **R1:** if outcome AUROC − 0.5 is less than half of selection AUROC − 0.5 (PubMed before 2010; RF with `all` and `attn_free`), the label is mostly selection.

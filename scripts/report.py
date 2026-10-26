@@ -585,6 +585,29 @@ def tried_tables():
                          "genetic − Minikel"]], index=False)
 
 
+def tuned_tables():
+    """§6.4: the primary endpoint and §6.5 R3 with both labels retuned on the time split
+    (results/novelty_tuned; scripts/analysis.py: time_novelty_tuned.csv, tried_time_tuned.csv)."""
+    nv = pd.read_csv(A / "time_novelty_tuned.csv")
+    x = nv[(nv.stratum == PRIMARY["stratum"]) & (nv.loss == PRIMARY["loss"]) & (nv["labels"] == "genetic")
+           & nv.model.isin(PRIMARY["models"]) & nv.feats.isin(PRIMARY["feats"])].copy()
+    x["genetic − Minikel"] = [ci(r.recall_top10pct_vs_minikel, r.recall_top10pct_vs_minikel_lo,
+                                 r.recall_top10pct_vs_minikel_hi, "{:+.2f}") for r in x.itertuples()]
+    for r in x[x.universe == "pooled"].itertuples():
+        num(f"tuned_primary_{r.model}_{r.feats}", x.at[r.Index, "genetic − Minikel"])
+    w = x.pivot_table(index=["model", "feats"], columns="universe", values="genetic − Minikel", aggfunc="first")
+    w = by_model(w.reindex(columns=[u for u in UP if u in w.columns]).reset_index())
+    w.columns = [UNP.get(c, c) for c in w.columns]
+    w["model"] = w.model.map(MN)
+    put("tuned_primary", w, index=False)
+    t = pd.read_csv(A / "tried_time_tuned.csv")
+    t = t[t.universe == "pooled"].copy()
+    t["genetic − Minikel"] = [ci(r.genetic_minus_minikel, r.lo, r.hi) for r in t.itertuples()]
+    t = by_model(t.sort_values(["contrast", "feats"], ascending=[False, True]))
+    t["model"] = t.model.map(MN)
+    put("tuned_tried", t[["contrast", "model", "feats", "minikel", "genetic", "genetic − Minikel"]], index=False)
+
+
 def genetic_delong():
     d = delong("novelty")
     d = d[(d.contrast == "vs_minikel_label") & (d.regime == "random")]
@@ -624,7 +647,7 @@ def control_tables():
 
 SECTIONS = [setup, fit_failures, main_tables, pfam_tables, delong_tables, effect_tables, feature_tables,
             analysis_tables, label_bias, coverage_table, discovery_tables, gp_table, novelty_tables, genetic_topk,
-            tried_tables, genetic_delong, waves_tables, control_tables]
+            tried_tables, tuned_tables, genetic_delong, waves_tables, control_tables]
 
 
 def main():

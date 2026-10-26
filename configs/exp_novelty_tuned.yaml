@@ -1,0 +1,15 @@
+# The 6.4 primary comparison rerun with params tuned on the time split for each label and
+# feature set (configs/tune_time.yaml): does the genetic label's deficit survive giving both
+# labels their own tuning? Same folds, test genes and seeds as results/novelty.
+name: novelty_tuned
+params: results/tuning_time/best_params.yaml
+grid:
+  universe: [string, reactome_fi, huri]
+  graph: [string, reactome_fi, huri]
+  copy: [real]
+  labels: [minikel, genetic]
+  feats: [attn_free, dated]
+  split: [time]
+  seed: [0, 1, 2, 3, 4]
+  model: [rf_feat, gp]
+  loss: [nnpu]
