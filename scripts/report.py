@@ -29,7 +29,8 @@ FIT_FAIL = 0.6  # training-fold AUROC below this = the model never fit its train
 U = ["string", "reactome_fi", "huri"]
 UN = {"string": "STRING", "reactome_fi": "Reactome FI", "huri": "HuRI"}
 MN = {"deg_lr": "degree LR", "rf_struct": "RF struct stats", "labelprop": "label propagation",
-      "mlp_feat": "MLP", "rf_feat": "RF", "mlp_feat_struct": "MLP + struct", "rf_feat_struct": "RF + struct",
+      "mlp_feat": "MLP", "rf_feat": "RF", "rf_pubag": "RF, bagging PU", "mlp_feat_struct": "MLP + struct",
+      "rf_feat_struct": "RF + struct",
       "sign_feat": "SIGN", "cs_feat": "Correct & Smooth", "gcn_none": "GCN (no feats)", "gcn_feat": "GCN",
       "sage_feat": "GraphSAGE", "gat_none": "GAT (no feats)", "gat_feat": "GAT", "gat_edge_feat": "GAT + edge vec",
       "gp": "GP (additive)"}
@@ -631,6 +632,95 @@ def tuned_tables():
     put("tuned_tried", t[["contrast", "model", "feats", "minikel", "genetic", "genetic − Minikel"]], index=False)
 
 
+def pu_tables():
+    """§6.4: bagging-PU RF vs the P-vs-U RF (results/pu_check; analysis.py: pu_contrast.csv)."""
+    c = pd.read_csv(A / "pu_contrast.csv")
+    x = c[(c.stratum == PRIMARY["stratum"]) & c.feats.isin(PRIMARY["feats"])].copy()
+    x["cell"] = [ci(r.recall_top10pct_diff, r.recall_top10pct_diff_lo, r.recall_top10pct_diff_hi, "{:+.2f}")
+                 for r in x.itertuples()]
+    for r in x[x.universe == "pooled"].itertuples():
+        num(f"pu_{'pubag' if r.contrast.startswith('rf_pubag') else 'genetic'}_{r.labels}_{r.feats}", r.cell)
+    w = x.pivot_table(index=["contrast", "labels", "feats"], columns="universe", values="cell", aggfunc="first")
+    w = w.reindex(columns=[u for u in UP if u in w.columns])
+    w.columns = [UNP[u] for u in w.columns]
+    put("pu_primary", w)
+
+
+MOD_STRATA = ["first drug: small molecule", "first drug: biologic", "oncology", "not oncology"]
+MOD_KEYS = [("-", "pubmed_before_T", "-", "-"), ("-", "known_family_count", "-", "-"),
+            ("minikel", "rf_feat", "dated", "nnpu"), ("minikel", "rf_feat", "attn_free", "nnpu"),
+            ("minikel", "gp", "dated", "nnpu")]
+
+
+def _mod_keep(d: pd.DataFrame) -> pd.DataFrame:
+    k = pd.Series(list(zip(d["labels"], d.model, d.feats, d.loss)), index=d.index)
+    return d[k.isin(MOD_KEYS) & d["copy"].isin(["none", "real"])]
+
+
+def _mod_name(r) -> str:
+    return r.model if r.labels == "-" else f"{MN[r.model]} ({r.feats})"
+
+
+def modality_tables():
+    """§6.6: future targets by first-drug modality and therapy area (time_novelty.csv strata),
+    their contrasts (time_contrasts.csv) and new targets by era (target_eras.csv)."""
+    e = pd.read_csv(A / "target_eras.csv")
+    e["universe"] = e.universe.map(UN)
+    put("target_eras", e[e.universe == "STRING"].drop(columns="universe"), "{:.2f}", index=False)
+    nv = _mod_keep(pd.read_csv(A / "time_novelty.csv"))
+    x = nv[nv.stratum.isin(MOD_STRATA) & (nv.universe == "pooled")].copy()
+    x["ranker"] = [_mod_name(r) for r in x.itertuples()]
+    x["cell"] = [f"{r.recall_top10pct:.2f} / {r.auroc:.2f}" for r in x.itertuples()]
+    w = x.pivot_table(index="ranker", columns="stratum", values="cell", aggfunc="first")
+    w = w.reindex(columns=[c for c in MOD_STRATA if c in w.columns])
+    n = nv[nv.stratum.isin(MOD_STRATA) & (nv.universe != "pooled") & (nv.model == "pubmed_before_T")]
+    n = n.pivot_table(index="stratum", columns="universe", values="n_future").reindex(columns=U)
+    w.loc["n (STRING / Reactome FI / HuRI)"] = [nums3(n.loc[c].values, "{:.0f}") if c in n.index else "–"
+                                                for c in w.columns]
+    put("modality_strata", w)
+    c = _mod_keep(pd.read_csv(A / "time_contrasts.csv"))
+    c = c[c.universe == "pooled"].copy()
+    c["ranker"] = [_mod_name(r) for r in c.itertuples()]
+    c["recall diff"] = [ci(r.recall_top10pct_diff, r.recall_top10pct_diff_lo, r.recall_top10pct_diff_hi, "{:+.2f}")
+                        for r in c.itertuples()]
+    c["AUROC diff"] = [ci(r.auroc_diff, r.auroc_diff_lo, r.auroc_diff_hi, "{:+.2f}") for r in c.itertuples()]
+    for r in c[c.contrast.str.startswith("first drug")].itertuples():
+        num(f"mod_{r.model}_{r.feats}", c.at[r.Index, "recall diff"])
+    put("modality_contrasts", c[["contrast", "ranker", "n_a", "n_b", "recall diff", "AUROC diff"]], index=False)
+
+
+ROLL_RANKERS = ["pubmed_before_T", "known_family_count", "closeness_to_known", "rf_attn_free"]
+
+
+def rolling_tables():
+    """§6.7: rolling time origins (rolling_origins.csv, rolling_trend.csv)."""
+    r = pd.read_csv(A / "rolling_origins.csv")
+    r = r[r.stratum.isin(["all", "novel (2 of 3)"])]
+    w = r.pivot_table(index=["universe", "origin", "known", "future", "frac_novel2", "ranking"],
+                      columns=["stratum", "metric"], values="value").reset_index()
+    w.columns = [" ".join(c).strip() if isinstance(c, tuple) else c for c in w.columns]
+    cell = lambda a, b: [f"{x:.2f} / {y:.2f}" if pd.notna(x) else "–" for x, y in zip(w[a], w[b])]  # noqa: E731
+    w["all"] = cell("all auroc", "all recall_top")
+    w["novel (2 of 3)"] = cell("novel (2 of 3) auroc", "novel (2 of 3) recall_top")
+    w["frac_novel2"] = w.frac_novel2.map("{:.0%}".format)
+    w = w.assign(o=w.ranking.map(ROLL_RANKERS.index), u=w.universe.map(U.index)).sort_values(["u", "origin", "o"])
+    w["universe"] = w.universe.map(UN)
+    put("rolling_origins", w[["universe", "origin", "known", "future", "frac_novel2", "ranking", "all",
+                              "novel (2 of 3)"]], index=False)
+    t = pd.read_csv(A / "rolling_trend.csv")
+    t = t[((t.stratum == "all") & (t.metric == "auroc"))
+          | ((t.stratum == "novel (2 of 3)") & (t.metric == "recall_top"))]
+    t = t.assign(slope=[ci(x.slope_per_decade, x.slope_lo, x.slope_hi, "{:+.2f}") for x in t.itertuples()],
+                 diff=[ci(x.last_minus_first, x.diff_lo, x.diff_hi, "{:+.2f}") for x in t.itertuples()])
+    for x in t[(t.stratum == "all")].itertuples():
+        num(f"roll_slope_{x.ranking}_{x.universe}", x.slope)
+    t = t.assign(o=t.ranking.map(ROLL_RANKERS.index), u=t.universe.map(U.index)).sort_values(["stratum", "u", "o"])
+    t["universe"] = t.universe.map(UN)
+    put("rolling_trend", t[["stratum", "metric", "universe", "ranking", "origins", "first", "last", "slope",
+                            "diff"]].rename(columns={"slope": "slope per decade", "diff": "last − first"}),
+        index=False)
+
+
 DATED_GRAPHS = {"string": "STRING v12", "biogrid09": "BioGRID Dec 2009", "string_sub09": "STRING, thinned"}
 
 
@@ -705,7 +795,8 @@ def control_tables():
 
 SECTIONS = [setup, fit_failures, main_tables, pfam_tables, delong_tables, effect_tables, feature_tables,
             analysis_tables, label_bias, coverage_table, discovery_tables, external_tables, gp_table, novelty_tables,
-            genetic_topk, tried_tables, tuned_tables, dated_tables, genetic_delong, waves_tables, control_tables]
+            genetic_topk, tried_tables, tuned_tables, pu_tables, modality_tables, rolling_tables, dated_tables,
+            genetic_delong, waves_tables, control_tables]
 
 
 def main():

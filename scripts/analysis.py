@@ -72,6 +72,22 @@ tried_*.csv       success given tried (report 6.5). Genes by Minikel programme h
                   AUROC and the paired difference, per graph and pooled (genes as clusters).
 time_novelty_tuned.csv, tried_time_tuned.csv  the same as time_novelty / tried_time for
                   results/novelty_tuned (both labels retuned on the time split, tune_time.yaml).
+time_novelty_pu.csv  the same as time_novelty for results/pu_check: RF fit P vs U (rf_feat)
+                  and bagging PU (rf_pubag, pulearn) with the same trees, labels and features.
+pu_contrast.csv   rf_pubag - rf_feat per label and feature set (paired over future targets), and
+                  genetic - Minikel with rf_pubag (the 6.4 primary endpoint with a PU-correct RF).
+time_contrasts.csv  report 6.6: per run key, AUROC and recall@10% of the future targets whose
+                  first drug was a biologic minus those whose first drug was a small molecule,
+                  and oncology minus the rest, with CIs resampling each group's targets; pooled
+                  over graphs too. The groups are also strata in time_novelty.csv.
+target_eras.csv   report 6.6: >= Phase III genes by 5-year bin of first approval: first-drug
+                  modality, oncology share, Pfam family already drugged then, study the year before.
+rolling_origins.csv, rolling_trend.csv  report 6.7: the time split repeated at several origins
+                  T with a fixed window (configs/data.yaml: rolling); per origin, rankers
+                  needing nothing dated beyond PubMed and approval years (PubMed before T,
+                  known Pfam relatives, closeness in today's graph, out-of-fold RF on
+                  attention-free features), AUROC and recall@10% per stratum; per ranker the
+                  slope over origins (per decade) and last - first, with bootstrap CIs.
 external_audit.csv  published top lists (report 5.3): DrugnomeAI's top-5% genes (Raies et al. 2022,
                   Supplementary Data 1; fetch.py) on the STRING universe, all and "novel" (not
                   Minikel >= Phase III, not Pharos Tclin). Shares: >= Phase III, Tclin, in a
@@ -101,6 +117,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from ghelps import data, ensure, features, ids, labels, paths  # noqa: E402
 from ghelps.runner import AXES  # noqa: E402
+from targetsplit import core as ts  # noqa: E402
 
 OUT = ROOT / "results" / "analysis"
 OUT.mkdir(parents=True, exist_ok=True)
@@ -309,20 +326,27 @@ def label_bias(universe: str, genes: list[str], cum: pd.DataFrame, pos_all: set,
 # ---------------------------------------------------------------------------------------
 # Time split: are future targets found, and which ones?
 
-NOVELTY_EXP, NOVELTY_RECALL_FRAC, NOVELTY_BOOT = "novelty", 0.10, 2000
+NOVELTY_EXP, NOVELTY_BOOT = "novelty", 2000  # recall in the top ts.TOP_FRAC (10%)
 TUNED_EXP = "novelty_tuned"  # the 6.4 comparison with both labels retuned on the time split
+PU_EXP = "pu_check"  # rf_feat (P vs U) next to bagging PU on the time split
 NOVELTY_KEY = ["labels", "copy", "feats", "model", "loss"]
 
 
-def _novelty_strata(pct: np.ndarray, fam: np.ndarray, hop: np.ndarray) -> dict[str, np.ndarray]:
-    """Future targets by how novel they were at T: study then, Pfam family drugged then, hops
-    to the targets known then. "novel" needs all three; "novel (2 of 3)" any two (larger n)."""
-    crit = np.c_[pct < 0.9, ~fam, hop >= 2]
-    return {"all": np.ones(len(pct), bool),
-            "study<0.5": pct < 0.5, "study 0.5-0.9": (pct >= 0.5) & (pct < 0.9), "study>=0.9": pct >= 0.9,
-            "drugged family": fam, "new family": ~fam,
-            "1 hop": hop <= 1, "2 hops": hop == 2, "3+ hops": hop >= 3,
-            "novel": crit.all(1), "novel (2 of 3)": crit.sum(1) >= 2}
+# The strata are defined once, in the released package (benchmark/targetsplit/core.py), so
+# the paper and the benchmark score the same thing.
+_novelty_strata = ts.novelty_strata
+_wins = ts.wins
+# further strata of the future targets (report 6.6): the modality of the first approved drug
+# (labels.target_first_modality) and whether any >= Phase III indication is in oncology
+# (Minikel areas of the oncology wave, configs/data.yaml)
+EXTRA_STRATA = ["first drug: small molecule", "first drug: biologic", "oncology", "not oncology"]
+
+
+def _extra_strata(fut_genes: np.ndarray) -> dict[str, np.ndarray]:
+    mod = labels.target_first_modality().reindex(fut_genes).values
+    onc = np.isin(fut_genes, list(labels.minikel_area_genes(CFG["splits"]["waves"]["oncology"])))
+    return {"first drug: small molecule": mod == "small molecule", "first drug: biologic": mod == "biologic",
+            "oncology": onc, "not oncology": ~onc}
 
 
 def _future_context(universe: str, genes: list[str], graph: str, pm_T: np.ndarray):
@@ -340,17 +364,9 @@ def _future_context(universe: str, genes: list[str], graph: str, pm_T: np.ndarra
     fam_known = pfam[:, pfam[known].any(0)].sum(1)
     hops = dijkstra(adj, directed=False, unweighted=True, indices=np.flatnonzero(known), min_only=True)
     fut = np.flatnonzero((sp.fold.values == "test") & (sp.y.values == 1))
-    strata = pd.DataFrame(_novelty_strata(pct_T[fut], fam_known[fut] > 0, hops[fut]))
+    strata = pd.DataFrame(_novelty_strata(pct_T[fut], fam_known[fut] > 0, hops[fut])
+                          | _extra_strata(np.array(genes)[fut]))
     return fut, strata.assign(gene=np.array(genes)[fut]), fam_known, hops
-
-
-def _wins(st: np.ndarray, fut: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Per future target: share of test negatives ranked below it (ties 1/2; its stratum's AUROC
-    is the mean of these) and whether it is in the top 10% of the test ranking."""
-    neg = np.sort(st[~fut])
-    v = st[fut]
-    lo, hi = np.searchsorted(neg, v, "left"), np.searchsorted(neg, v, "right")
-    return (lo + 0.5 * (hi - lo)) / len(neg), v >= np.quantile(st, 1 - NOVELTY_RECALL_FRAC)
 
 
 def time_novelty_genes(universe: str, genes: list[str], graph: str, cum: pd.DataFrame,
@@ -671,7 +687,7 @@ def time_novelty(gene_rows: pd.DataFrame, pooled: bool = False) -> list[dict]:
         if pooled:
             n_u = d.groupby(NOVELTY_KEY).universe.transform("nunique")
             d = d[n_u == d.universe.nunique()]
-        strata = list(_novelty_strata(np.zeros(1), np.zeros(1, bool), np.zeros(1)))
+        strata = [*_novelty_strata(np.zeros(1), np.zeros(1, bool), np.zeros(1)), *EXTRA_STRATA]
         ref = d[d.model == "pubmed_before_T"]
         for name in strata:
             ds = d[d[name]]
@@ -750,6 +766,221 @@ def time_split_coverage(universe: str, genes: list[str], graph: str, cum: pd.Dat
     return rows
 
 
+def model_contrast(gene_rows: pd.DataFrame, a: str = "rf_pubag", b: str = "rf_feat") -> list[dict]:
+    """Per universe and pooled, label, feature set and stratum: model a minus model b (same label,
+    features, loss), AUROC and recall@10%, 95% CI resampling the stratum's future targets
+    (paired: the same draws for both models). Also each label's genetic - Minikel difference for
+    model a, the 6.4 primary endpoint with that model."""
+    if gene_rows.empty:
+        return []
+    rng = np.random.default_rng(0)
+    d0 = gene_rows[gene_rows.model.isin([a, b])]
+    rows = []
+    strata = ["all", "novel (2 of 3)", "novel", "new family"]
+    for pooled in (False, True):
+        groups = [("pooled", d0)] if pooled else list(d0.groupby("universe", sort=False))
+        for universe, d in groups:
+            if pooled:
+                d = d[d.groupby(NOVELTY_KEY).universe.transform("nunique") == d.universe.nunique()]
+            for st in strata:
+                ds = d[d[st]]
+                genes_s = ds.gene.unique()
+                if not len(genes_s):
+                    continue
+                gid = {g: i for i, g in enumerate(genes_s)}
+                counts = rng.multinomial(len(genes_s), np.full(len(genes_s), 1 / len(genes_s)), size=NOVELTY_BOOT)
+                bm = {}
+                for key, k in ds.groupby(NOVELTY_KEY, sort=False):
+                    c = k.gene.map(gid).values
+                    bm[key] = {m: (k[m].values.astype(float).mean(), _boot_means(k[m].values.astype(float), c, counts))
+                               for m in ("win", "hit")}
+                pairs = [(f"{a} - {b}", (lab, cp, fe, a, lo), (lab, cp, fe, b, lo))
+                         for (lab, cp, fe, mo, lo) in bm if mo == a] + \
+                        [(f"genetic - minikel ({a})", ("genetic", cp, fe, a, lo), ("minikel", cp, fe, a, lo))
+                         for (lab, cp, fe, mo, lo) in bm if mo == a and lab == "genetic"]
+                for name, ka, kb in pairs:
+                    if ka not in bm or kb not in bm:
+                        continue
+                    row = dict(universe=universe, contrast=name, labels=ka[0], feats=ka[2], loss=ka[4], stratum=st,
+                               n_future=len(genes_s))
+                    for m, col in (("win", "auroc"), ("hit", "recall_top10pct")):
+                        diff = bm[ka][m][1] - bm[kb][m][1]
+                        row |= {f"{col}_a": bm[ka][m][0], f"{col}_b": bm[kb][m][0],
+                                f"{col}_diff": bm[ka][m][0] - bm[kb][m][0],
+                                f"{col}_diff_lo": np.quantile(diff, 0.025), f"{col}_diff_hi": np.quantile(diff, 0.975)}
+                    rows.append(row)
+    return rows
+
+
+# ---------------------------------------------------------------------------------------
+# Modality and therapy area of the future targets (report 6.6)
+
+CONTRASTS = [("first drug: biologic", "first drug: small molecule"), ("oncology", "not oncology")]
+
+
+def stratum_contrasts(gene_rows: pd.DataFrame) -> list[dict]:
+    """Per universe (and pooled over graphs) and run key: AUROC and recall@10% of stratum a minus
+    stratum b (CONTRASTS), with a 95% CI resampling each stratum's future targets separately
+    (they are different genes), and the same difference for the PubMed-before-T ranker. Pooled:
+    run keys present in all three graphs, genes as clusters."""
+    if gene_rows.empty:
+        return []
+    rng = np.random.default_rng(0)
+    rows = []
+    for pooled in (False, True):
+        groups = [("pooled", gene_rows)] if pooled else list(gene_rows.groupby("universe", sort=False))
+        for universe, d in groups:
+            if pooled:
+                d = d[d.groupby(NOVELTY_KEY).universe.transform("nunique") == d.universe.nunique()]
+            for a, b in CONTRASTS:
+                draws = {}
+                for side in (a, b):
+                    g = d[d[side]].gene.unique()
+                    draws[side] = (g, rng.multinomial(len(g), np.full(len(g), 1 / len(g)), size=NOVELTY_BOOT)
+                                   if len(g) else None)
+                if draws[a][1] is None or draws[b][1] is None:
+                    continue
+                for key, k in d.groupby(NOVELTY_KEY, sort=False):
+                    row = dict(universe=universe, **dict(zip(NOVELTY_KEY, key)), contrast=f"{a} - {b}",
+                               n_a=len(draws[a][0]), n_b=len(draws[b][0]))
+                    for m, col in (("win", "auroc"), ("hit", "recall_top10pct")):
+                        bs, pts = [], []
+                        for side in (a, b):
+                            ks = k[k[side]]
+                            gid = {g: i for i, g in enumerate(draws[side][0])}
+                            v = ks[m].values.astype(float)
+                            bs.append(_boot_means(v, ks.gene.map(gid).values, draws[side][1]))
+                            pts.append(v.mean())
+                        diff = bs[0] - bs[1]
+                        row |= {f"{col}_a": pts[0], f"{col}_b": pts[1], f"{col}_diff": pts[0] - pts[1],
+                                f"{col}_diff_lo": np.quantile(diff, 0.025), f"{col}_diff_hi": np.quantile(diff, 0.975)}
+                    rows.append(row)
+    return rows
+
+
+def target_eras(universe: str, genes: list[str], cum: pd.DataFrame, first_drugged: pd.Series, pos_all: set,
+                modality: pd.Series, oncology: set) -> list[dict]:
+    """What did each era's new targets look like? Minikel >= Phase III genes by the 5-year bin of
+    their first approval (1980-2024): first-drug modality, oncology share, and, relative to the
+    targets drugged before each gene's own approval year, whether its Pfam family already had a
+    target and its study percentile the year before. Descriptive."""
+    G = np.array(genes)
+    fd = first_drugged.reindex(genes).values
+    pos = np.isin(G, list(pos_all)) & ~np.isnan(fd)
+    pfam = pd.read_parquet(paths.PROCESSED / "features" / universe / "pfam.parquet")
+    pfam = pfam.reindex(genes, fill_value=0).values > 0
+    mod = modality.reindex(genes).values
+    c = cum.reindex(genes, fill_value=0)
+    pct_year = {y: rankdata(c[y].values) / len(G) for y in c.columns}
+    rows = []
+    for lo in range(1980, 2025, 5):
+        m = pos & (fd >= lo) & (fd < lo + 5)
+        if not m.any():
+            continue
+        fam, pct = [], []
+        for i in np.flatnonzero(m):
+            before = pos & (fd < fd[i])
+            fam.append(bool(pfam[i] @ pfam[before].any(0)))
+            yr = int(fd[i]) - 1
+            pct.append(pct_year[yr][i] if yr in pct_year else 0.5)
+        rows.append(dict(universe=universe, era=f"{lo}-{lo + 4}", new_targets=int(m.sum()),
+                         frac_biologic_first=(mod[m] == "biologic").mean(),
+                         frac_small_molecule_first=(mod[m] == "small molecule").mean(),
+                         frac_oncology=np.isin(G[m], list(oncology)).mean(),
+                         frac_drugged_family_then=np.mean(fam), median_pubmed_pct_year_before=np.median(pct),
+                         frac_top_decile_year_before=np.mean(np.array(pct) >= 0.9)))
+    return rows
+
+
+# ---------------------------------------------------------------------------------------
+# Rolling time origins (report 6.7)
+
+ROLLING_STRATA = ("all", "novel (2 of 3)", "new family", "study<0.5")
+
+
+def _rolling_rf(x: np.ndarray, known: np.ndarray, unl: np.ndarray, k: int, seed: int = 0) -> np.ndarray:
+    """Out-of-fold P-vs-U RF scores (the paper's rf_feat recipe, DEFAULTS in ghelps/train.py):
+    the genes not known at T are split into k folds; each fold is scored by an RF fit on every
+    known target and the unlabelled genes of the other folds."""
+    from sklearn.ensemble import RandomForestClassifier
+    s = np.full(len(x), np.nan)
+    pool = np.flatnonzero(~known)
+    fold = np.random.default_rng(seed).permutation(len(pool)) % k
+    for f in range(k):
+        held = pool[fold == f]
+        tr_u = np.setdiff1d(np.flatnonzero(unl), held)
+        idx = np.r_[np.flatnonzero(known), tr_u]
+        rf = RandomForestClassifier(500, min_samples_leaf=5, max_features="sqrt", class_weight="balanced_subsample",
+                                    n_jobs=-1, random_state=seed).fit(x[idx], known[idx].astype(int))
+        s[held] = rf.predict_proba(x[held])[:, 1]
+    return s
+
+
+def rolling_origins(universe: str, genes: list[str], graph: str, cum: pd.DataFrame, first_drugged: pd.Series,
+                    pos_all: set) -> tuple[list[dict], list[dict]]:
+    """For each origin T (configs/data.yaml: rolling): known = >= Phase III genes first drugged
+    before T; future = first drugged in [T, T + window); test = future + every gene that is not
+    >= Phase III; positives drugged later or undated are left out. Rankers: PubMed before T,
+    known targets in the gene's Pfam families, closeness to known targets (today's graph), RF on
+    attention-free features (out-of-fold). Returns per-origin rows (AUROC and recall@10% per
+    stratum, CI over future targets, paired difference from PubMed) and trend rows: per ranker
+    and stratum, the least-squares slope of the metric over origins (per decade) and the last -
+    first difference, each with a 95% CI from independent bootstraps of each origin's targets."""
+    rc = CFG["rolling"]
+    W, B = rc["window"], NOVELTY_BOOT
+    G = np.array(genes)
+    fd = first_drugged.reindex(genes).values
+    pos = np.isin(G, list(pos_all))
+    pfam = pd.read_parquet(paths.PROCESSED / "features" / universe / "pfam.parquet").reindex(genes, fill_value=0).values
+    ei = np.load(paths.PROCESSED / "graphs" / universe / f"{graph}.real.npy")
+    x = data.features(universe, "attn_free")
+    rng = np.random.default_rng(0)
+    rows, per = [], {}
+    for T in rc["origins"]:
+        known = pos & (fd < T)
+        future = pos & (fd >= T) & (fd < T + W)
+        unl = ~pos  # unlabelled at T: never >= Phase III (later targets are left out of training too)
+        test = np.flatnonzero(future | ~pos)
+        if T - 1 not in cum.columns:
+            continue
+        pm_T = cum.reindex(genes, fill_value=0)[T - 1].values.astype(float)
+        ctx = ts.context(known, pm_T, pfam, ei)
+        strata = ts.strata_table(ctx, future)[list(ROLLING_STRATA)]
+        tie = rankdata(pm_T) / len(pm_T)
+        rankings = {"pubmed_before_T": pm_T, "known_family_count": ctx.family_count.values + 1e-3 * tie,
+                    "closeness_to_known": -ctx.hops.values + 1e-3 * tie,
+                    "rf_attn_free": _rolling_rf(x, known, unl, rc["folds"])}
+        sc = ts.score({k: {0: v} for k, v in rankings.items()}, {0: test}, future, strata, "pubmed_before_T",
+                      B, ts.TOP_FRAC)
+        rows += sc.assign(universe=universe, graph=graph, origin=T, window=W, known=int(known.sum()),
+                          future=int(future.sum()), frac_novel2=strata["novel (2 of 3)"].mean()).to_dict("records")
+        f = future[test]
+        for name, v in rankings.items():
+            w, h = ts.wins(v[test], f)
+            for st in ROLLING_STRATA:
+                idx = np.flatnonzero(strata[st].values)
+                if len(idx):
+                    b = rng.integers(0, len(idx), (B, len(idx)))
+                    for m, vec in (("auroc", w), ("recall_top", h.astype(float))):
+                        per[(name, st, m, T)] = (vec[idx].mean(), vec[idx][b].mean(1))
+    trend = []
+    for name, st, m in {k[:3] for k in per}:
+        Ts = [T for T in rc["origins"] if (name, st, m, T) in per]
+        if len(Ts) < 2:
+            continue
+        pt = np.array([per[(name, st, m, T)][0] for T in Ts])
+        bs = np.array([per[(name, st, m, T)][1] for T in Ts])  # (origins, B)
+        t = (np.array(Ts) - np.mean(Ts)) / 10
+        slope = lambda y: (t @ (y - y.mean(0))) / (t @ t)  # noqa: E731  per decade
+        sb = slope(bs)
+        d = bs[-1] - bs[0]
+        trend.append(dict(universe=universe, graph=graph, ranking=name, stratum=st, metric=m,
+                          origins=" ".join(map(str, Ts)), first=pt[0], last=pt[-1],
+                          slope_per_decade=slope(pt), slope_lo=np.quantile(sb, .025), slope_hi=np.quantile(sb, .975),
+                          last_minus_first=pt[-1] - pt[0], diff_lo=np.quantile(d, .025), diff_hi=np.quantile(d, .975)))
+    return rows, trend
+
+
 def main():
     ensure.ensure_data()  # fetches any raw source added since the data was built (e.g. pmid_years.tsv)
     pos_all = labels.minikel(CFG["labels"]["minikel_min_phase"])
@@ -757,6 +988,9 @@ def main():
     sizes, hubs, mem, med, prior, audit, ladder, leak, lbias, cover = [], [], [], [], [], [], [], [], [], []
     novelty_genes, time_topk, tg, tauc, tor, ttime = [], [], [], [], [], []
     tuned_genes, ttime_tuned = [], []  # results/novelty_tuned: both labels retuned on the time split
+    eras, rolling, rolling_trend, pu_genes = [], [], [], []
+    modality = labels.target_first_modality()
+    oncology = labels.minikel_area_genes(CFG["splits"]["waves"]["oncology"])
     phase = labels.minikel_best_phase()
     first_drugged = labels.target_first_approval()
     launch = first_drugged[first_drugged.index.isin(pos_all)]
@@ -773,6 +1007,9 @@ def main():
         ttime.append(_time_tried_rows(universe, genes))
         ttime_tuned.append(_time_tried_rows(universe, genes, TUNED_EXP))
         leak += study_leak(universe)
+        eras += target_eras(universe, genes, cum, first_drugged, pos_all, modality, oncology)
+        r, t = rolling_origins(universe, genes, members[0], cum, first_drugged, pos_all)
+        rolling, rolling_trend = rolling + r, rolling_trend + t
         lbias += label_bias(universe, genes, cum, pos_all, membrane)
         lpm = np.log1p(pm)
         quint = pd.qcut(pd.Series(lpm).rank(method="first"), 5, labels=False).values
@@ -808,12 +1045,15 @@ def main():
             ladder += l
             novelty_genes.append(time_novelty_genes(universe, genes, graph, cum))
             tuned_genes.append(time_novelty_genes(universe, genes, graph, cum, TUNED_EXP))
+            pu_genes.append(time_novelty_genes(universe, genes, graph, cum, PU_EXP))
             time_topk += time_topk_audit(universe, genes, graph, cum, phase)
             cover += time_split_coverage(universe, genes, graph, cum, first_drugged, phase, pos_all)
     ng = pd.concat(novelty_genes, ignore_index=True) if novelty_genes else pd.DataFrame()
     novelty = time_novelty(ng) + time_novelty(ng, pooled=True)
     ngt = pd.concat([pd.DataFrame(), *tuned_genes], ignore_index=True)
     novelty_tuned = time_novelty(ngt) + time_novelty(ngt, pooled=True)
+    ngp = pd.concat([pd.DataFrame(), *pu_genes], ignore_index=True)
+    novelty_pu = time_novelty(ngp) + time_novelty(ngp, pooled=True)
     if not ng.empty:
         ng.to_csv(OUT / "time_novelty_genes.csv.gz", index=False)
     for name, rows in (("graph_sizes", sizes), ("hub_bias", hubs), ("membrane", mem), ("mediation", med),
@@ -822,7 +1062,10 @@ def main():
                        ("time_split_coverage", cover), ("tried_groups", tg), ("tried_auroc", tauc),
                        ("tried_genetic_or", tor), ("tried_time", time_tried(pd.concat([pd.DataFrame(), *ttime]))),
                        ("time_novelty_tuned", novelty_tuned), ("external_audit", ext_audit),
-                       ("tried_time_tuned", time_tried(pd.concat([pd.DataFrame(), *ttime_tuned])))):
+                       ("tried_time_tuned", time_tried(pd.concat([pd.DataFrame(), *ttime_tuned]))),
+                       ("time_contrasts", stratum_contrasts(ng)), ("target_eras", eras),
+                       ("rolling_origins", rolling), ("rolling_trend", rolling_trend),
+                       ("time_novelty_pu", novelty_pu), ("pu_contrast", model_contrast(ngp))):
         if not rows:
             continue
         t = pd.DataFrame(rows)

@@ -10,9 +10,11 @@ Per universe (results/benchmark/<universe>/):
   splits/seed<k>.tsv the time split: fold (train / val / test / excluded) and both training
                      labels (y_minikel: drugged before the cut-off; y_genetic: genetic evidence
                      before it). Test genes and their y are the same for both labels.
-  future_targets.tsv the test positives (first drugged from the cut-off on) with their novelty strata
+  future_targets.tsv the test positives (first drugged from the cut-off on) with their novelty
+                     strata, first-drug modality and oncology strata
   edges/<graph>.tsv  the universe's graph(s) as ENSG pairs (real graph; dated graphs too)
-plus benchmark/evaluate.py and benchmark/README.md copied to the release root, and a MANIFEST.
+plus the targetsplit package (benchmark/: pyproject.toml, targetsplit/, evaluate.py, README.md)
+copied to the release root, so `pip install <release>` gives the scorer, and a MANIFEST.
 Uses $GHELPS_DATA, so it exports exactly the data the runs used.
 """
 import argparse
@@ -78,8 +80,10 @@ def export(out: Path) -> None:
                                                                       index=False)
         manifest.append(f"{universe}: {len(genes)} genes, {len(fut_idx)} future targets, graphs "
                         f"{', '.join([*members, *graphs.dated_graphs(A.CFG, universe)])}")
-    for f in ("evaluate.py", "README.md"):
+    for f in ("evaluate.py", "README.md", "pyproject.toml"):
         shutil.copy(ROOT / "benchmark" / f, out / f)
+    shutil.copytree(ROOT / "benchmark" / "targetsplit", out / "targetsplit", dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__"))
     (out / "MANIFEST").write_text(f"time split cut-off: {T}\nseeds: {list(seeds)}\n" + "\n".join(manifest) + "\n")
     print((out / "MANIFEST").read_text())
 

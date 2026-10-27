@@ -10,3 +10,4 @@ huri
 logs
 tuning
 summary.md
+*.egg-info

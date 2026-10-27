@@ -122,6 +122,14 @@ def _chembl_approvals(dest: Path) -> None:
         .to_csv(dest, sep="\t", index=False)
 
 
+def _chembl_modality(dest: Path) -> None:
+    """Approved molecules' type (Small molecule, Antibody, Protein, Oligonucleotide, ...), to
+    classify the modality of the first drug on each target (report 6.6). Kept apart from
+    chembl_approvals.tsv so that file, which defines the time split, is not refetched."""
+    mol = pd.DataFrame(_chembl_pages("molecule", "molecules", max_phase=4, only="molecule_chembl_id,molecule_type"))
+    mol.dropna().drop_duplicates().to_csv(dest, sep="\t", index=False)
+
+
 # Human genetic evidence (Open Targets) kept for the genetic label, with the threshold each
 # source must pass. GWAS: fine-mapped credible sets whose locus-to-gene score is >= 0.8; gene
 # burden: exome-wide significant (p < 2.5e-6); Mendelian sources: their own top confidence
@@ -280,6 +288,7 @@ SOURCES: dict[str, callable] = {
     "gene2pubmed.gz": url("https://ftp.ncbi.nlm.nih.gov/gene/DATA/gene2pubmed.gz"),
     "pmid_years.tsv": _pmid_years,  # dates gene2pubmed papers (study-before-launch analysis)
     "chembl_approvals.tsv": _chembl_approvals,  # dates when each target was first drugged (time split)
+    "chembl_modality.tsv": _chembl_modality,    # modality of approved drugs (first-drug modality, 6.6)
     "genetic_evidence.tsv": _genetic_evidence,  # human genetic evidence per gene (genetic label)
     "goa_human.gaf.gz": url("https://current.geneontology.org/annotations/goa_human.gaf.gz"),
     "goa_human_2009.gaf.gz": url(GOA_2009),  # dated features (GO as of Dec 2009)

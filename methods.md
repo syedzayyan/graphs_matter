@@ -11,7 +11,7 @@ This file gives the full details behind `summary.md`. Every value here is taken 
 **Design:**
 - **Graphs:** three, each with its own gene universe, positives, splits and tuned hyperparameters. They span literature-derived (STRING), curated (Reactome FI) and systematic, literature-free (HuRI) interaction data.
 - **Graph conditions:** every graph model is run with the real graph and with several control graphs (rewired, empty, pathway-only, shuffled edge vectors), so "does the graph help?" is answered within the same model.
-- **Experiments:** six. Together they cross graphs, models, losses, feature sets, splits and label sets.
+- **Experiments:** six main ones, plus three robustness checks on the time split. Together they cross graphs, models, losses, feature sets, splits and label sets.
 
 | experiment | runs | what varies |
 |---|---|---|
@@ -21,7 +21,10 @@ This file gives the full details behind `summary.md`. Every value here is taken 
 | `nonsense_labels` | 2,160 | labels shuffled across all genes, or within Pfam families |
 | `nonsense_feats` | 780 | node features replaced by Gaussian noise |
 | `novelty` | 7,290 | time split; Minikel vs genetic label; 3 feature sets incl. `dated`; 3 losses |
-| **total** | **41,430** | |
+| `novelty_tuned` | 120 | §6.4 primary comparison (RF, GP) with params retuned on the time split per label and feature set |
+| `dated_graph` | 440 | time split on STRING v12, BioGRID Dec 2009 and thinned STRING, over the STRING genes |
+| `pu_check` | 180 | time split; `rf_feat` vs bagging-PU `rf_pubag`; both labels; 3 feature sets |
+| **total** | **42,170** | |
 
 Not every axis combination exists. For example, feature sets don't apply to feature-free models, and graph-free models have no graph condition (§6.1). The run counts above are the combinations that actually run.
 
@@ -31,7 +34,7 @@ Not every axis combination exists. For example, feature sets don't apply to feat
 3. `main.py run`: experiment grids.
 4. `scripts/summarise.py`, `scripts/analysis.py`, `scripts/delong.py`, `scripts/figures.py`, `scripts/report.py`.
 
-On the cluster, `scripts/hpc/submit_all.sh` chains these as Slurm jobs with `afterok` dependencies. Run and tune jobs each use one GPU, 8 CPUs and a 2 h limit.
+On the cluster, `scripts/hpc/submit_all.sh` chains these for the six main experiments and `scripts/hpc/submit_robustness.sh` for the three checks. Both submit Slurm jobs with `afterok` dependencies. Run and tune jobs each use one GPU, 8 CPUs and a 2 h limit.
 
 ---
 
@@ -50,6 +53,7 @@ All raw files are downloaded by `ghelps/fetch.py` into `$GHELPS_DATA/raw`, which
 | NCBI gene2pubmed | current | PubMed counts per gene (study intensity) |
 | PubMed E-utilities | every 20,000th PMID's Entrez date | dating papers (PMID → year) |
 | ChEMBL REST | mechanisms, molecules with `max_phase=4`, targets | first approval year per target (time split) |
+| ChEMBL REST | `molecule_type` of molecules with `max_phase=4` (`chembl_modality.tsv`) | first-drug modality (§6.6) |
 | Open Targets Platform 26.09 | tractability; 9 genetic-evidence datasets | tractability features; genetic label |
 | GO annotations (GOA human) | current `goa_human.gaf.gz` | GO features, membrane label |
 | GOA human release 80 | 2009-12-17, GAF 1.0 | `dated` GO features |
@@ -240,6 +244,7 @@ Neighbour-degree summaries, k-core, PageRank and betweenness are log1p-transform
 | `labelprop` | label propagation (PyG) | labels only | real, rw0–2, pwsub |
 | `mlp_feat` | MLP | features | none |
 | `rf_feat` | random forest | features | none |
+| `rf_pubag` | bagging PU over decision trees (`pulearn.BaggingPuClassifier`) | features | none |
 | `mlp_feat_struct` | MLP | features + structure | real, rw0–2, pwsub |
 | `rf_feat_struct` | random forest | features + structure | real, rw0–2, pwsub |
 | `sign_feat` (SIGN) | MLP on [X, ÂX, Â²X, Â³X] (PyG SIGN transform) | features | + empty |
@@ -256,6 +261,7 @@ Neighbour-degree summaries, k-core, PageRank and betweenness are log1p-transform
 - **MLP with 1 layer** is plain logistic regression, and the tuner can choose it.
 - **Structural models and the empty graph:** the empty graph and shuffled edge vectors are meaningless for structural models, so they aren't run.
 - **Feature sets** are not crossed with feature-free models.
+- **`rf_pubag`** (Mordelet & Vert 2013). Each of the forest's trees is fit on every training positive and a bootstrap of as many training unlabelled genes, so the unlabelled set is never fit as one negative class. The trees have `rf_feat`'s settings and reuse its tuned parameters (`runner.TUNED_AS`). It runs only under the P-vs-U training set (`nnpu`), in `configs/exp_pu_check.yaml`.
 
 ### 6.2 Additive GP (`ghelps/gp.py`)
 
@@ -289,7 +295,7 @@ Neighbour-degree summaries, k-core, PageRank and betweenness are log1p-transform
 
 **Non-torch models:**
 - Random forests and degree LR use class-balanced weights.
-- Random forests and degree LR use the same training set as the loss specifies. For nnPU that is P vs U, without the PU risk.
+- Random forests and degree LR use the same training set as the loss specifies. For nnPU that is P vs U, without the PU risk: unlabelled genes are fit as negatives, with class weights. `rf_pubag` is the PU-correct check on this (§6.1).
 - Label propagation uses the training labels directly.
 
 **On the time split,** `pn_pubmed` matches on PubMed counts from before 2010.
@@ -476,7 +482,12 @@ The time-split benchmark is exported as plain TSVs, one folder per universe:
 - the future targets with their strata
 - the graphs as ENSG pairs, BioGRID 2009 included
 
-`benchmark/evaluate.py` is a standalone scorer for any gene ranking. It reports the §6 novelty endpoints with target-bootstrap CIs and paired PubMed differences, the top-100 audit, and selection and outcome AUROC. Run on this repository's RF with `dated` features on STRING, it reproduces `time_novelty.csv`'s AUROC and recall in every stratum exactly. The CI bounds differ in the third decimal because the bootstrap draws differ.
+**The `targetsplit` package** (`benchmark/`, installable with `pip install ./benchmark`, depends only on numpy, pandas and scipy) has three commands:
+- **`targetsplit score`** scores any gene ranking. It reports the §6 novelty endpoints with target-bootstrap CIs and paired differences from the PubMed ranker, the top-100 audit, and selection and outcome AUROC. The family and closeness rankers are scored alongside.
+- **`targetsplit build`** makes a release in the same layout from a user's own genes, dated label, PubMed counts, and optionally domains and graphs, so the test applies to other labels and gene sets. A criterion without its input (no domains, no graph) is dropped from the novelty strata instead of being filled with a default.
+- **`targetsplit baseline`** fits a P-vs-U RF or a bagging-PU RF (`pulearn`, optional extra `[pu]`) on a user's features, per seed.
+
+The strata and per-target scores are defined once, in `targetsplit/core.py`, and `scripts/analysis.py` imports them, so the paper and the package score the same thing. On the exported release the package reproduces the earlier standalone `evaluate.py` exactly. The CI bounds differ in the third decimal only because the bootstrap draws come in a different order. `benchmark/evaluate.py` is kept as a shim for older releases. The export copies the package into the release root.
 
 ---
 
@@ -496,6 +507,10 @@ The time-split benchmark is exported as plain TSVs, one folder per universe:
 | `time_topk_audit.csv` | Time split, nnPU, `all` / `attn_free` / `dated`, real graph or none, both labels: the top-100 test genes per run (each seed's own test set; the test negatives are redrawn per seed). Reports the share that are future targets and novel (2 of 3) future targets, the median PubMed percentile before 2010 and the share in that top decile, the share in a drug programme today, the share sharing Pfam with or within 1 hop of a target drugged before 2010, and the share with genetic evidence before 2010 and at any date. Reference rows: all test genes, and the PubMed-before-2010 ranker. Mean over seeds. |
 | `tried_*.csv` | Success given tried (§6.5). Genes are grouped from Minikel's target–indication pairs: never tried (nothing beyond preclinical), tried (≥ Phase I), success (≥ Phase III, i.e. the label), and resolved failure (best Phase I/II with no active programme; active ones are censored). For each predictor it reports AUROC for the label (success vs rest), selection (tried vs never) and outcome (success vs resolved failure), with 95% CIs from 2,000 gene bootstraps. Predictors: PubMed before 2010 and now; genetic evidence before 2010 and any date; out-of-fold scores from the main experiment (each seed's test-set percentile, averaged over the seeds a gene was tested in). Also the odds ratio (Woolf CI, +0.5 correction) of success vs resolved failure for genetic evidence. On the time split, genetic- vs Minikel-trained twins are compared on selection and outcome among the test genes, paired, per graph and pooled with genes as clusters. |
 | `external_audit.csv` | Published top lists (§5.3). DrugnomeAI's top-5% genes (Tclin and Tier 1 models; Raies et al. 2022, Supplementary Data 1, fetched through Europe PMC) are mapped to the STRING universe by HGNC symbol. Each list, and its "novel" subset (not Minikel ≥ Phase III, not Pharos Tclin), is described by: share ≥ Phase III and Tclin; share in a programme; share in the top PubMed decile; share sharing a Pfam domain with another ≥ Phase III gene; share adjacent to one in STRING; share with genetic evidence; Pharos TDL. Reference rows of the same size: all genes, a PubMed ranker, and our RF's out-of-fold ranking (main experiment, random split). |
+| `time_novelty_pu.csv`, `pu_contrast.csv` | As `time_novelty.csv` for `results/pu_check`. `pu_contrast` gives `rf_pubag` − `rf_feat` per label and feature set, paired over targets, and genetic − Minikel with `rf_pubag` (§6.4). |
+| `time_contrasts.csv` | §6.6. Per run key: AUROC and recall in the top 10% of biologic-first minus small-molecule-first future targets, and of oncology minus other future targets. The CI resamples each group's targets separately, per graph and pooled. |
+| `target_eras.csv` | §6.6. ≥ Phase III genes by 5-year bin of first approval (1980–2024): share whose first drug was a biologic or a small molecule; oncology share; share sharing a Pfam domain with a target drugged before the gene's own approval year; PubMed percentile the year before. |
+| `rolling_origins.csv`, `rolling_trend.csv` | §6.7. The time split at origins T = 2000, 2005, 2010, 2015, each with a 5-year window of future targets. Test genes are the future targets plus every gene never ≥ Phase III; later and undated positives are left out. Rankers: PubMed before T; known targets in the gene's Pfam families; closeness in today's graph; and an out-of-fold RF on `attn_free` features (5 folds over the genes not known at T, each scored by an RF fit on all known targets and the other folds' unlabelled genes; `rf_feat` default settings, 500 trees). Per origin: AUROC and recall in the top 10% per stratum, with target-bootstrap CIs and paired differences from PubMed. Trends: the least-squares slope over origins (per decade) and last − first, with CIs from independent bootstraps of each origin's targets. |
 | `time_split_coverage.csv` | Train / test / undated-launched / undated-Phase-III-only / no-programme genes, compared on study before 2010 and now, and on novelty relative to the targets known before 2010. |
 
 **Novelty strata.** Each future target is placed in strata by what was known before 2010:
@@ -508,6 +523,10 @@ The time-split benchmark is exported as plain TSVs, one folder per universe:
 | **novel** | all three: not top-decile study, new family, ≥ 2 hops | 7 / 17 / 11; 24 |
 | **novel (2 of 3)** | any two of the three | 44 / 48 / 35; 77 |
 
+**Further strata (§6.6):**
+- **First-drug modality** (`labels.target_first_modality`): the ChEMBL `molecule_type` of the drugs approved in the year the gene was first drugged. Small molecule; biologic (antibody, ADC, protein or peptide, enzyme); other (oligonucleotide, gene or cell therapy, and the rest); or mixed when that year's drugs differ.
+- **Oncology:** any ≥ Phase III indication in Minikel's oncology or hematology areas (the oncology wave).
+
 **Reference rankers:**
 - PubMed count before 2010
 - PubMed count now (leaks the future)
@@ -518,7 +537,7 @@ The time-split benchmark is exported as plain TSVs, one folder per universe:
 
 ## 12. Pre-specified readings
 
-Five sets of interpretations were written into `scripts/report_template.md` before the corresponding results were generated. The git history of that file records when.
+Eight sets of interpretations were written into `scripts/report_template.md` before the corresponding results were generated. The git history of that file records when.
 
 **1. Pfam split (§2.2).**
 - **Prediction:** if RF with `attn_free` features loses clearly more AUROC from the random to the Pfam split than RF with `all` features, the family shortcut is confirmed. If it loses about as little, the reading of the family-shuffle control has to be weakened.
@@ -547,10 +566,27 @@ Five sets of interpretations were written into `scripts/report_template.md` befo
 - Both CIs include 0: the test is uninformative.
 - Supporting: graph model vs RF on BioGRID.
 
+**2d. Bagging-PU RF (§6.4).** Recall in the top 10% of novel (2 of 3) future targets, pooled, `attn_free` and `dated`:
+- `rf_pubag` − `rf_feat` CIs include 0 for both labels: §6.4 stands.
+- Genetic − Minikel with `rf_pubag` includes or is above 0, where it was below 0 with `rf_feat`: the deficit is partly the RF's P-vs-U handling, and §6.4 is restated with `rf_pubag`.
+- Otherwise: the PU handling matters for absolute numbers, not for the comparison.
+
 **3. Success given tried (§6.5).** Fixed in commit `cea67b8`, before computing:
 - **R1:** if outcome AUROC − 0.5 is less than half of selection AUROC − 0.5 (PubMed before 2010; RF with `all` and `attn_free`), the label is mostly selection.
 - **R2:** if the odds-ratio CI for pre-2010 genetic evidence is above 1, the genetic label carries outcome signal.
 - **R3:** on the time split, genetic − Minikel. An outcome CI that includes or exceeds 0, with the selection CI below 0, would mean a selection deficit. Both below 0 would mean the genetic label, as learned, is weaker.
+
+**4. First-drug modality (§6.6).** Biologic − small-molecule recall in the top 10%, pooled, RF with `dated` features (Minikel, nnPU), against the same difference for the PubMed ranker:
+- RF's CI below 0 and PubMed's not: the label also records which modalities existed (reported under the first door, the label).
+- Both below 0: the gap is study, not modality.
+- RF's CI includes 0: no evidence. If the CI is wider than 0.4, the test is inconclusive.
+- Oncology: descriptive only.
+
+**5. Rolling origins (§6.7).** The slope per decade of AUROC on all future targets, per graph, for the family and PubMed rankers:
+- Family slope below 0 on at least two of three graphs, PubMed's not: the family shortcut weakens as families fill.
+- Both below 0 on at least two graphs: future targets resemble past ones less in general.
+- Neither: no evidence of saturation over 2000–2019.
+- Secondary, descriptive: the RF's recall on novel (2 of 3) targets per origin. The stratum's composition changes with T.
 
 ---
 
@@ -560,13 +596,14 @@ Five sets of interpretations were written into `scripts/report_template.md` befo
 - `all` features and the STRING graph are current snapshots, so they leak post-2010 knowledge.
 - `dated` uses today's Pfam assignments. They are derived from sequence, but some families were defined after 2009.
 - GTEx (in `attn_free` and `dated`) was measured after 2010, though uniformly for every gene.
-- No graph is dated.
+- Only one graph is dated: BioGRID as of December 2009 (§6.3), on the STRING universe's genes.
 
-**Tuning:** done once, on the random split with Minikel labels and `all` features, then reused for every other split, label and feature set.
+**Tuning:** done once, on the random split with Minikel labels and `all` features, then reused for every other split, label and feature set. The exception is RF and the GP on the time split, retuned per label and feature set (`configs/tune_time.yaml`, §6.4). `rf_pubag` reuses `rf_feat`'s parameters, untuned for bagging.
 
 **Dating:**
 - The paper-year fit dates PubMed entry, not publication.
-- Positives without a ChEMBL approval are excluded from the time split.
+- Positives without a ChEMBL approval are excluded from the time split. On STRING, 212 of the 352 excluded only reached Phase III, so no approval source can date them.
+- Rolling origins (§6.7) use today's Pfam assignments and graph for every T, and PubMed's gene links thin out before 2000 (§4.4).
 
 **HuRI** covers 32% of the positives. Its pathway subgraph has 832 edges, so HuRI `pwsub` results are close to empty-graph results.
 
@@ -589,5 +626,7 @@ Python 3.11–3.12, managed with `uv` (`uv.lock` pins every version). Main packa
 | python-igraph | 1.0.0 |
 | leidenalg | 0.12.0 |
 | pandas | 3.0.6 |
+| pulearn (bagging PU) | 0.2.0 |
+| targetsplit (this repository's `benchmark/`) | 0.2.0 |
 
 Runs are deterministic given the seed: split seeds, the torch seed per run, `random_state = seed` for the forests, seeded GP sampling and fixed SVD seeds.

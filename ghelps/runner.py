@@ -23,6 +23,7 @@ from ghelps.paths import PROCESSED as _PROCESSED  # noqa: E402
 P_SPLITS = _PROCESSED / "splits"
 AXES = ["universe", "graph", "copy", "labels", "feats", "split", "seed", "model", "loss"]
 AXIS_DEFAULTS = {"feats": ["all"]}  # axes an experiment config may omit
+TUNED_AS = {"rf_pubag": "rf_feat"}  # untuned models that reuse another model's tuned params
 
 
 def tuning_condition(copy: str | None) -> str:
@@ -56,6 +57,7 @@ def tuned_params(best: dict, universe: str, model: str, loss: str, copy: str | N
     if best and not set(best) & set(_universes()):
         raise ValueError("best_params.yaml predates per-graph tuning (no universe level); "
                          "re-run tune.py or pass --no-tuned")
+    model = TUNED_AS.get(model, model)
     per_cond = best.get(universe, {}).get(model, {}).get(tuning_loss(loss), {})
     params = per_cond.get(tuning_condition(copy), {})
     return {k: v for k, v in params.items() if not k.startswith("_")}

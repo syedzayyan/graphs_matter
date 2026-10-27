@@ -30,6 +30,7 @@ LADDER = {
     "labelprop":       ("lp",     [],                  STRUCT),
     "mlp_feat":        ("mlp",    ["feat"],            NOGRAPH),
     "rf_feat":         ("rf",     ["feat"],            NOGRAPH),
+    "rf_pubag":        ("pubag",  ["feat"],            NOGRAPH),
     "mlp_feat_struct": ("mlp",    ["feat", "struct"],  STRUCT),
     "rf_feat_struct":  ("rf",     ["feat", "struct"],  STRUCT),
     "sign_feat":       ("sign",   ["feat"],            PROP),
@@ -171,6 +172,21 @@ def score(p: Problem, model: str, loss: str, seed: int, **over) -> tuple[np.ndar
                                     n_jobs=1, random_state=seed)
         rf.fit(x[idx], t)
         return rf.predict_proba(x)[:, 1], {}
+
+    if kind == "pubag":
+        # Bagging PU (Mordelet & Vert 2013; pulearn): every tree sees all training positives
+        # and a bootstrap of as many unlabelled genes, so the unlabelled set is never fit as
+        # one negative class (rf, above, fits P vs U with class weights). Same tree settings
+        # as rf_feat; only meaningful with the P-vs-U training set (loss nnpu).
+        from pulearn import BaggingPuClassifier
+        from sklearn.tree import DecisionTreeClassifier
+        x = inputs(p, blocks)
+        bag = BaggingPuClassifier(DecisionTreeClassifier(min_samples_leaf=hp["rf_leaf"],
+                                                         max_features=hp["rf_max_features"]),
+                                  n_estimators=hp["rf_trees"], max_samples=int(t.sum()), n_jobs=1,
+                                  random_state=seed)
+        bag.fit(x[idx], t)
+        return bag.predict_proba(x)[:, 1], {}
 
     if kind == "gp":
         # P-vs-U regression on all train positives + a seeded sample of train unlabelled

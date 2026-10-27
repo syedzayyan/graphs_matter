@@ -10,9 +10,11 @@ uv run python main.py summarise main [--metric auprc]
 uv run python scripts/analysis.py                        # graph sizes, hub bias, membrane enrichment
 uv run python scripts/figures.py --exps main membrane    # figure sets
 
-# on the cluster: prepare (fetch + build) -> tune array -> 4 experiment grids -> summaries,
-# analysis and figures, chained with dependencies
+# on the cluster: prepare (fetch + build) -> tune array -> the six main experiment grids ->
+# summaries, analysis and figures, chained with dependencies
 bash scripts/hpc/submit_all.sh
+# then the robustness runs: time-split retune, dated graph, bagging-PU check, and their summaries
+bash scripts/hpc/submit_robustness.sh
 # after a code fix: rerun only missing/changed runs, then summaries + figures (no re-tuning)
 bash scripts/hpc/resume.sh [experiment ...]
 ```
@@ -42,9 +44,13 @@ Other commands:
 | `exp_membrane` | membrane vs not (GO:0016020 / GO:0005886) | Pfam + pathway (no GO, no tractability) | Positive control: on a learnable, graph-coherent label, does the graph help? If yes here but not on drug targets, the drug-target task is what makes the graph redundant. |
 | `exp_nonsense_labels` | Minikel permuted across all genes; Minikel permuted within Pfam families | all | ≈ 0.5 overall. What survives the within-family shuffle was learned from family membership (resemblance to past targets), not from the gene itself. |
 | `exp_nonsense_feats` | Minikel | Gaussian noise vectors | Feature models should score ≈ 0.5; graph models keep only what the graph itself gives. |
+| `exp_novelty` | Minikel; genetic evidence before 2010 | all; attention-free; dated (2009) | Time split: trained on targets first drugged before 2010, which of the later targets are found, by how novel they were in 2009? |
+| `exp_novelty_tuned` | Minikel; genetic | attention-free; dated | The genetic-vs-Minikel comparison with RF and GP retuned on the time split per label (`configs/tune_time.yaml`). |
+| `exp_dated_graph` | Minikel | attention-free; dated | Time split on STRING, BioGRID Dec 2009 and density-matched STRING: is the STRING gain post-2010 knowledge? |
+| `exp_pu_check` | Minikel; genetic | all; attention-free; dated | RF fit P vs U (`rf_feat`) next to bagging PU (`rf_pubag`, pulearn) on the time split. |
 
 All experiments:
-- **Graphs:** all three, each its own test.
+- **Graphs:** all three, each its own test (`exp_dated_graph`: the STRING universe only).
 - **Seeds:** 5 evaluation seeds.
 - **Models:** the full ladder.
 - **Conditions:** every graph condition the experiment's config lists.
@@ -203,3 +209,15 @@ Everything is downloaded by `ghelps/fetch.py` into `$GHELPS_DATA/raw`, and exist
 - **Minikel et al. 2024:** from `ericminikel/genetic_support`.
 
 Unpinned: GOA, Ensembl2Reactome, gene2pubmed, UniProt and Pharos all serve their current release. Record the fetch date when freezing the benchmark.
+
+## Benchmark package
+
+`benchmark/` is the `targetsplit` package: the time-split benchmark as a standalone tool (numpy, pandas, scipy). `uv sync` installs it into this project, and `scripts/analysis.py` takes its novelty strata from it. Others install it with `pip install ./benchmark` (add `[pu]` for the bagging-PU baseline) and then:
+
+```bash
+targetsplit score    --release results/benchmark --universe string --scores my_scores.tsv
+targetsplit build    --genes my_genes.tsv --cutoff 2010 --out my_release [--domains d.tsv] [--edges g.tsv]
+targetsplit baseline --release results/benchmark --universe string --features X.tsv --out s.tsv --model pubag
+```
+
+`scripts/export_benchmark.py` writes the release (data plus a copy of the package). See `benchmark/README.md`.

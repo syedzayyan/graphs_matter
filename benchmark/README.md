@@ -14,7 +14,7 @@ A benchmark for gene-level drug-target prioritisation that separates *finding ne
 |---|---|
 | `genes.tsv` | One row per gene. Identifiers; PubMed count before the cut-off and now, plus its percentile; Minikel best phase; `programme_status` (never / success = ≥ Phase III / failure = best Phase I–II with no active programme / censored); first approval year; genetic evidence before the cut-off and at any date; Pharos TDL; number of pre-2010 targets sharing a Pfam domain; hops to the nearest pre-2010 target in the universe's graph. |
 | `splits/seed<k>.tsv` | The time split for seeds 0–4: `fold` (train / val / test / excluded), `y_minikel`, `y_genetic`. The test genes and their labels are the same for both training labels. The test negatives are drawn separately for each seed. |
-| `future_targets.tsv` | The test positives with their novelty strata. Study before the cut-off (< 0.5 / 0.5–0.9 / ≥ 0.9 percentile); Pfam family already drugged or new; 1 / 2 / 3+ hops from a pre-2010 target; `novel` (all of: not top-decile study, new family, ≥ 2 hops); `novel (2 of 3)` (any two). |
+| `future_targets.tsv` | The test positives with their novelty strata. Study before the cut-off (< 0.5 / 0.5–0.9 / ≥ 0.9 percentile); Pfam family already drugged or new; 1 / 2 / 3+ hops from a pre-2010 target; `novel` (all of: not top-decile study, new family, ≥ 2 hops); `novel (2 of 3)` (any two). Also the modality of the first approved drug (small molecule / biologic) and oncology vs not. |
 | `edges/<graph>.tsv` | The universe's graph as ENSG pairs. `string/edges/biogrid09.tsv` is BioGRID as of December 2009, a graph without post-2010 knowledge. `string_sub09.tsv` is its density-matched STRING control. |
 
 ## Rules for a fair entry
@@ -23,17 +23,63 @@ A benchmark for gene-level drug-target prioritisation that separates *finding ne
 2. **Features and graphs must be dated before 2010, or flagged as leaking.** Current literature-derived features (GO, curated pathways, tractability, STRING text mining) know which genes were later drugged. Report results with dated inputs, or say plainly that the inputs leak.
 3. **Report the novel strata and the PubMed comparison**, not only overall AUROC.
 
+## Install
+
+```
+pip install .            # in the release folder, or in benchmark/ of the code repository
+pip install ".[pu]"      # adds the bagging-PU baseline (pulearn)
+```
+
+Only numpy, pandas and scipy are needed to score.
+
 ## Scoring
 
 ```
-python evaluate.py --release . --universe string --scores my_scores.tsv --out my_report.tsv
+targetsplit score --release . --universe string --scores my_scores.tsv --out my_report.tsv
 ```
 
-`my_scores.tsv` has the columns `ensg` and `score`, and optionally `seed` when the model is retrained per seed. Each novelty metric comes with a 95% bootstrap CI over the future targets (2,000 draws) and a paired difference from the PubMed-before-2010 ranker. The scorer reports:
+`my_scores.tsv` has the columns `gene` (or `ensg`) and `score`, and optionally `seed` when the model is retrained per seed. Each novelty metric comes with a 95% bootstrap CI over the future targets (2,000 draws) and a paired difference from the PubMed-before-2010 ranker. The family and closeness rankers are scored alongside. The scorer reports:
 
-- **AUROC and recall in the top 10%** for all future targets, `novel (2 of 3)`, `novel` and `new family`
+- **AUROC and recall in the top 10%** per stratum of `future_targets.tsv`. The printout shows all future targets, `novel (2 of 3)`, `novel` and `new family`; `--out` has every stratum, including first-drug modality and oncology.
 - **a top-100 audit:** share that are future targets, that are novel future targets, top-decile studied, already in a programme, in a drugged family, one hop from a pre-2010 target, or with genetic evidence
 - **selection and outcome AUROC** among the test genes: tried vs never tried, and succeeded vs failed once tried
+
+`python evaluate.py ...` still works with the same arguments.
+
+From Python:
+
+```python
+from targetsplit import Release
+rel = Release(".", "string")
+for seed in rel.seeds:
+    idx, y = rel.train(seed, label="minikel")   # fit only on these genes
+    ...                                          # your model -> one score per gene in rel.G
+report = rel.score(my_scores)                    # array, Series by gene, or table with seed
+```
+
+## A baseline on your features
+
+```
+targetsplit baseline --release . --universe string --features X.tsv --out scores.tsv --model pubag
+```
+
+`X.tsv` has `gene` and one column per feature. `rf` fits positives against unlabelled genes, as the paper's RF does. `pubag` is bagging PU (Mordelet & Vert 2013, via `pulearn`): each tree sees every positive and a bootstrap of as many unlabelled genes.
+
+## Your own genes and label
+
+```
+targetsplit build --genes my_genes.tsv --cutoff 2015 --out my_release --name mine \
+                  --domains pfam.tsv --edges biogrid_2014.tsv
+targetsplit score --release my_release --universe mine --scores my_scores.tsv
+```
+
+`my_genes.tsv` has `gene`, `first_year` (when it first became a positive, empty if never) and `pubmed_before_cutoff`. Optional columns:
+- `positive`: undated positives are excluded
+- `label_<name>`: another training label, dated before the cut-off
+- `programme_status`: never / success / failure / censored
+- `flag_<name>`: any 0/1 property to audit in the top 100
+
+`--domains` (gene, domain) defines "drugged family" and `--edges` (a, b) defines hops; without one, that criterion is dropped from the novelty strata. Prefer a graph dated before the cut-off. `targetsplit build --help` has the details.
 
 ## Known limits
 
@@ -47,7 +93,7 @@ python evaluate.py --release . --universe string --scores my_scores.tsv --out my
 | source | release | licence |
 |---|---|---|
 | Minikel et al. 2024 (*Nature*), `ericminikel/genetic_support` | GitHub data | see repository |
-| ChEMBL (first approvals) | REST API | CC BY-SA 3.0 |
+| ChEMBL (first approvals, molecule types) | REST API | CC BY-SA 3.0 |
 | Open Targets Platform (genetic evidence) | 26.09 | CC0 1.0 |
 | NCBI gene2pubmed, PubMed | current | public domain (NLM terms) |
 | UniProt / Pfam | current | CC BY 4.0 |

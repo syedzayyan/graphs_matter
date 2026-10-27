@@ -715,6 +715,17 @@ The extreme values in the full range come from cells outside the primary endpoin
 
 {{tuned_tried}}
 
+**Is it the RF's handling of unlabelled genes?** RF here fits positives against every unlabelled gene as a negative (class-weighted), whatever the loss is called. For the genetic label (19% positives) that treats many likely positives as negatives. A bagging-PU RF (Mordelet & Vert 2013, `pulearn`; `rf_pubag`) avoids it: every tree sees all positives and a bootstrap of as many unlabelled genes. It is run on the same time split, labels, features and tuned tree settings (`configs/exp_pu_check.yaml`).
+
+*Reading, fixed before these runs (see the git history of `scripts/report_template.md`).* Primary measure: recall in the top 10% of novel (2 of 3) future targets, pooled over graphs, `attn_free` and `dated` features, paired over targets.
+- **`rf_pubag` − `rf_feat` CIs include 0 for both labels:** the P-vs-U shortcut doesn't change what is found. §6.4 stands as stated.
+- **Genetic − Minikel with `rf_pubag` includes 0 or is above 0, where it was below 0 with `rf_feat`:** the genetic label's deficit is partly how RF treats unlabelled genes. §6.4 is restated with `rf_pubag`.
+- **Otherwise** (`rf_pubag` differs from `rf_feat` but genetic − Minikel stays below 0): the PU handling matters for absolute numbers, not for the comparison. §6.4 stands, with both RFs reported.
+
+**Table 6.4o: bagging-PU RF vs RF, and genetic − Minikel with bagging PU** (recall in the top 10% of novel (2 of 3) future targets, pooled; 95% CI over targets).
+
+{{pu_primary}}
+
 **Table 6.4b: time split, nnPU, genetic label** (`real / rewired / empty`). Compare with Tables 6.3a–b, which are trained on the Minikel label.
 
 {{genetic_head_time_nnpu_all}}
@@ -835,6 +846,62 @@ HuRI:
 
 {{tried_time}}
 
+### 6.6 Which future targets: first-drug modality and therapy area
+
+**Why.** Before 2000, new targets were reached mostly by small molecules; since then biologics have opened extracellular and cell-surface targets with other properties. A model trained on targets drugged before 2010 learns the targets that small molecules could reach. If it misses targets first reached by a biologic for that reason, the label also records which modalities existed at the time. Oncology dominates new targets and may drive the novel stratum.
+
+**Setup.**
+- **First-drug modality** (`labels.target_first_modality`): the ChEMBL molecule type of the drugs approved in the year the gene was first drugged. The groups are small molecule, biologic (antibody, ADC, protein or peptide, enzyme), other, and mixed.
+- **Oncology:** any ≥ Phase III indication in Minikel's oncology or hematology areas (the oncology wave of §7).
+- Both are extra strata of the §6.2 future targets. The contrasts (biologic − small molecule, oncology − rest) resample each group's targets separately.
+
+*Reading, fixed before computing (see the git history of `scripts/report_template.md`).* Primary measure: biologic − small-molecule recall in the top 10%, pooled over graphs, for RF with `dated` features (Minikel label, nnPU). It is compared with the same difference for the PubMed-before-2010 ranker.
+- **RF's CI below 0, PubMed's CI includes or is above 0:** models trained on the pre-2010 label miss biologic-first targets beyond what study explains. The label also records which modalities existed, and this is reported as part of the first door (the label).
+- **Both CIs below 0:** biologic-first targets were less studied in 2009. The gap is study, not modality.
+- **RF's CI includes 0:** no evidence that first-drug modality shapes what is found. If that CI is wider than 0.4, the test is inconclusive at these group sizes and is reported as such.
+- **Oncology** is descriptive: no reading.
+
+**Table 6.6a: new targets by era of first approval** (≥ Phase III genes; family and study relative to the targets drugged before each gene's own approval year).
+
+{{target_eras}}
+
+**Table 6.6b: future targets by first-drug modality and therapy area** (recall in the top 10% / AUROC, pooled over graphs; group sizes per graph).
+
+{{modality_strata}}
+
+**Table 6.6c: contrasts** (pooled; 95% CI resampling each group's targets).
+
+{{modality_contrasts}}
+
+### 6.7 Rolling time origins
+
+**Why.** §6 uses one cut-off. If drugged families are filling up, a family-based shortcut should find a shrinking share of each era's new targets.
+
+**Setup** (`configs/data.yaml: rolling`; `scripts/analysis.py: rolling_origins`):
+- **Origins and window:** cut-offs T = 2000, 2005, 2010, 2015, each with the targets first drugged in [T, T + 5) as future targets, so every origin has the same follow-up.
+- **Training and test genes:** known targets are those drugged before T. The test genes are the future targets plus every gene never ≥ Phase III. Positives drugged later, or undated, are left out.
+- **Rankers** need nothing dated at T beyond PubMed counts and approval years:
+  - PubMed before T
+  - known targets in the gene's Pfam families
+  - closeness to known targets in today's graph (this leaks)
+  - an out-of-fold RF on attention-free features
+- **What is not repeated:** the dated GO, KEGG and BioGRID inputs exist only for 2009, so `dated` features and the GNNs are not rerun here.
+- **Composition shifts:** the strata are defined relative to each T, so their composition changes as families fill. The share of novel (2 of 3) targets per origin is reported next to the results.
+
+*Reading, fixed before computing (see the git history of `scripts/report_template.md`).* Primary measure: the slope over origins (per decade) of AUROC on all future targets, per graph, with 95% CIs from bootstrapping each origin's targets. It is computed for the family ranker and for the PubMed ranker.
+- **Family slope below 0 on at least two of three graphs, PubMed's not:** the family shortcut weakens as families fill, and new targets increasingly come from undrugged families.
+- **Both below 0 on at least two graphs:** future targets resemble past ones less over time in general, not only by family.
+- **Neither:** no evidence of saturation over 2000–2019. The 2010 split is then not a special case.
+- **Secondary:** the RF's recall on novel (2 of 3) targets per origin. It is descriptive, because the stratum's composition changes with T.
+
+**Table 6.7a: per origin** (AUROC / recall in the top 10%; all future targets and novel (2 of 3)).
+
+{{rolling_origins}}
+
+**Table 6.7b: trends over origins** (slope per decade and last − first, 95% CI).
+
+{{rolling_trend}}
+
 ## 7. Therapy-area waves
 
 **Setup:** train on targets never used in a therapy area; test on targets used only in it. Waves with fewer than 30 test genes on a graph are skipped, so HuRI has oncology only.
@@ -945,8 +1012,9 @@ The literature graph *alone* carries the label, through study-correlated topolog
 
 1. **More labels on the time split** (§6.4 has genetic evidence): Phase I entries, or genetic evidence restricted to GWAS and burden (hypothesis-free) once enough pre-2010 data exists.
 2. **A dated graph:** set up with BioGRID Dec 2009 and a density control (§6.3, `configs/exp_dated_graph.yaml`). STRING v8.3's bulk downloads are no longer served, so BioGRID is the dated graph. (Dated features are done: `dated`, §6.)
-3. **gnomAD constraint and AlphaFold pockets,** as further non-literature features, run through §4.3's leak test.
-4. **Write-up:**
+3. **Dating the excluded Phase III-only positives** (§6.0) by their first Phase III start (ClinicalTrials.gov, from about 2000) instead of first approval. A second approval source such as DrugCentral could date at most the 140 launched-but-undated STRING genes.
+4. **gnomAD constraint and AlphaFold pockets,** as further non-literature features, run through §4.3's leak test.
+5. **Write-up:**
    - Open with the thesis that the label records portfolio decisions, so predicting it well measures imitation. Put it in the introduction, not the discussion: §6.1 is the evidence, and it is also the obvious objection to the time split.
    - Frame the paper as complementary to Rahimi et al.: on essentiality (network-coherent biology) GNNs help; on drug targets, with proper controls and a time split, they mostly reproduce the field's attention.
 

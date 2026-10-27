@@ -80,3 +80,31 @@ def genetic(before: int | None = None) -> set[str]:
     if before is not None:
         d = d[d.year < before]
     return set(d.ensg)
+
+
+# ChEMBL molecule_type -> modality class of a drug
+MODALITY = {"Small molecule": "small molecule", "Antibody": "biologic", "Antibody drug conjugate": "biologic",
+            "Protein": "biologic", "Enzyme": "biologic"}  # anything else (oligonucleotide, gene, cell, ...): other
+
+
+def target_first_modality() -> pd.Series:
+    """ENSG -> modality of the drugs approved in the year the gene was first drugged: "small
+    molecule", "biologic" (antibody, ADC, protein or peptide, enzyme), "other" (oligonucleotide,
+    gene or cell therapy, ...), or "mixed" when that year's drugs differ. Uses the same ChEMBL
+    mechanisms as target_first_approval."""
+    d = pd.read_csv(ids.RAW / "chembl_approvals.tsv", sep="\t")
+    d["ensg"] = ids.map_uniprot(d.uniprot)
+    d = d.dropna(subset=["ensg"])
+    d = d[d.first_approval == d.groupby("ensg").first_approval.transform("min")]
+    mt = pd.read_csv(ids.RAW / "chembl_modality.tsv", sep="\t").set_index("molecule_chembl_id").molecule_type
+    d["modality"] = d.molecule_chembl_id.map(mt).map(MODALITY).fillna("other")
+    return d.groupby("ensg").modality.agg(lambda m: m.iloc[0] if m.nunique() == 1 else "mixed")
+
+
+def minikel_area_genes(areas: list[str], min_phase: str = "Phase III") -> set[str]:
+    """Genes with at least one >= min_phase indication in any of Minikel's therapy `areas`."""
+    pp = _minikel_pp()
+    ind = pd.read_csv(ids.RAW / "minikel" / "indic.tsv", sep="\t", usecols=["indication_mesh_id", "areas"])
+    pos = pp[pp.ccatnum >= PHASE_NUM[min_phase]].merge(ind, on="indication_mesh_id", how="left")
+    a = pos.areas.fillna("").str.split(r"[;,|]").apply(lambda xs: {x.strip() for x in xs})
+    return set(pos.ensg[a.apply(lambda xs: bool(xs & set(areas)))])

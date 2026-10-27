@@ -91,3 +91,14 @@ splits:
     infection: [infection]
   wave_generic_areas: [signs/symptoms, other, congenital]
   wave_min_test_genes: 30         # waves with fewer single-wave genes in a universe are skipped
+
+# Rolling time origins (report 6.7, scripts/analysis.py: rolling_origins). The 2010 split
+# repeated at several cut-offs T, with targets first drugged in [T, T + window) as the future
+# targets, so every origin has the same follow-up. Only rankers that need nothing dated at T
+# beyond PubMed counts and approval years: PubMed before T, known targets in the gene's Pfam
+# families, closeness to known targets (today's graph: leaks), and an out-of-fold RF on
+# attention-free features. The dated GO / KEGG / BioGRID inputs exist only for 2009.
+rolling:
+  origins: [2000, 2005, 2010, 2015]
+  window: 5
+  folds: 5

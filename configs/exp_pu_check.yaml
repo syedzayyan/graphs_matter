@@ -1,0 +1,16 @@
+# Is the RF's P-vs-U shortcut part of the result? rf_feat fits positives against all unlabelled
+# genes as negatives (class-weighted). rf_pubag is bagging PU (Mordelet & Vert 2013, pulearn):
+# each tree sees every positive and a bootstrap of as many unlabelled genes. Same trees, same
+# tuned params (rf_feat's), same time-split folds and test genes as results/novelty
+# (report 6.4, "A PU-correct RF").
+name: pu_check
+grid:
+  universe: [string, reactome_fi, huri]
+  graph: [string, reactome_fi, huri]
+  copy: [real]                 # ignored by these graph-free models
+  labels: [minikel, genetic]
+  feats: [all, attn_free, dated]
+  split: [time]
+  seed: [0, 1, 2, 3, 4]
+  model: [rf_feat, rf_pubag]
+  loss: [nnpu]
